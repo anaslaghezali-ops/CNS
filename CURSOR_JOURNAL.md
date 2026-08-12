@@ -6,9 +6,9 @@
 
 ## Convention de travail
 
-- **Branche Git** : `Cursor` — toutes les modifications faites via Cursor Cloud
-  Agent doivent être poussées sur cette branche (pas directement sur
-  `claude/chicknster-reconciliation-system-460chx` sans merge explicite).
+- **Branche Git** : `Cursor` **uniquement** — toutes les modifications poussées sur
+  `origin/Cursor`. Ne pas créer des branches `cursor/...` (préfixe cloud agent) :
+  le gérant travaille sur une seule branche.
 - **Ce journal** : chaque session de modification significative ajoute une entrée
   datée ci-dessous (règle métier, fichiers modifiés, raison, impact).
 - **Parité Python / JS** : le moteur existe en double —
