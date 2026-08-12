@@ -102,3 +102,9 @@ CNS/
 
 Les fichiers réels du restaurant ne sont **pas** versionnés (voir
 `.gitignore`). Le traitement se fait localement, en mémoire.
+
+## Modifications Cursor (agent IA)
+
+Les changements faits via **Cursor Cloud Agent** sont poussés sur la branche
+`Cursor` et documentés dans [`CURSOR_JOURNAL.md`](CURSOR_JOURNAL.md) (règles
+métier, fichiers touchés, contexte pour les sessions suivantes).

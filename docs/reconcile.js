@@ -148,6 +148,7 @@
         earnings: num(r["Estimated earnings"]),
         subtotal: num(r["Subtotal"]),
         discount_funded: num(r["Discount Funded by you"]),
+        // Montant rapprochement Glovo = col W − col AE — voir CURSOR_JOURNAL.md
         amount: (function () {
           var sub = num(r["Subtotal"]);
           if (isNaN(sub)) return NaN;
