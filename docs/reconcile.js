@@ -941,7 +941,35 @@
     return true;
   }
 
-  function flagMisusedGlovoNumber(p, matchedLine, matchedG) {
+  function summarizeExtraByPayment(lines) {
+    var buckets = {};
+    lines.forEach(function (p) {
+      var t = isNaN(p.total) ? 0 : p.total;
+      if (t <= AMOUNT_TOL) return;
+      buckets[p.payment_type] = (buckets[p.payment_type] || 0) + t;
+    });
+    return Object.keys(buckets).map(function (pay) {
+      return buckets[pay].toFixed(0) + " DH en « " + pay + " »";
+    }).join(" + ");
+  }
+
+  function extraPaymentNote(dupVers) {
+    var parts = summarizeExtraByPayment(dupVers);
+    if (!parts) return "";
+    var hasCash = false, hasBT = false, hasCC = false;
+    dupVers.forEach(function (p) {
+      if (isNaN(p.total) || p.total <= AMOUNT_TOL) return;
+      if (p.payment_type === "Cash") hasCash = true;
+      else if (p.payment_type === "Bank Transfer") hasBT = true;
+      else if (p.payment_type === "Credit card") hasCC = true;
+    });
+    var only = [];
+    if (hasCash && !hasBT && !hasCC) only.push("surplus uniquement en Cash");
+    if (hasBT && !hasCash && !hasCC) only.push("surplus uniquement en Bank Transfer (pas en Cash)");
+    if (hasCC && !hasCash && !hasBT) only.push("surplus uniquement en Credit card");
+    return parts + (only.length ? " — " + only[0] : "");
+  }
+
     var amt = isNaN(p.total) ? 0 : p.total;
     var amtTxt = amt > AMOUNT_TOL ? amt.toFixed(0) + " DH" :
       (amt === 0 ? "0 DH (annulée ou montant nul — vérifier)" : "?");
@@ -1036,6 +1064,7 @@
         var extra = cl.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0) -
                     (isNaN(retainVer.total) ? 0 : retainVer.total);
         var dupPay = dupVers.length === 1 ? dupVers[0].payment_type : retainPay;
+        var extraBreakdown = extraPaymentNote(dupVers);
         var retainNote = "";
         if (glovoRef) {
           retainNote = " Commande Glovo " + glovoRef.order_id + " (" + glovoRef.payment_type +
@@ -1053,8 +1082,12 @@
           type: "Ticket en double (correction)",
           detail: "Ticket " + name + " saisi " + cl.length + " fois (doublon / correction) : " +
                   versions + ". " + (diffs.length ? "Évolution : " + diffs.join(", ") + ". " : "") +
-                  "⚠️ La/les copie(s) en trop gonflent le total POS de " + extra.toFixed(0) +
-                  " DH — une version doit être annulée au POS." + retainNote,
+                  (extra > AMOUNT_TOL
+                    ? "⚠️ Surplus POS à retirer : " + extra.toFixed(0) + " DH" +
+                      (extraBreakdown ? " → " + extraBreakdown : "") +
+                      ". Une version doit être annulée au POS."
+                    : "⚠️ Vérifier qu'une version est bien annulée au POS.") +
+                  retainNote,
           source_ref: glovoRef ? glovoRef.order_id : name,
           amount_pos: extra,
           payment_pos: dupPay,
