@@ -125,12 +125,13 @@ if "result" in st.session_state:
     st.divider()
     st.subheader("📊 Vue d'ensemble")
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Transactions POS", summary["pos_transactions"])
     m2.metric("Total POS (DH)", f"{summary['pos_total']:,.0f}")
     m3.metric("Anomalies", summary["n_anomalies"])
     m4.metric("🔴 Haute", summary["severity"].get("haute", 0))
     m5.metric("🟠 Moyenne", summary["severity"].get("moyenne", 0))
+    m6.metric("🔵 Infos", summary.get("n_infos", 0))
 
     _period = (f"📅 Période analysée (d'après le POS) : **{summary.get('pos_date_min','')}** "
                f"→ **{summary.get('pos_date_max','')}**.")
@@ -160,37 +161,35 @@ if "result" in st.session_state:
         use_container_width=True,
     )
 
-    # Anomalies
+    def _table(items):
+        return pd.DataFrame([{
+            "Gravité": SEV_BADGE[a["severity"]], "Source": a["source"],
+            "Type": a["type"], "Ticket": a.get("ticket_name", ""), "Détail": a["detail"],
+        } for a in sorted(items, key=lambda x: SEV_ORDER.get(x["severity"], 9))])
+
+    real = [a for a in anomalies if a["severity"] != "info"]
+    infos = [a for a in anomalies if a["severity"] == "info"]
+
+    # Anomalies (Haute + Moyenne)
     st.divider()
     st.subheader("🚨 Anomalies")
-
-    if not anomalies:
+    st.caption("Éléments à corriger (Haute + Moyenne). Les rattachements et notes sont en « Infos ».")
+    if not real:
         st.success("✅ Aucune anomalie détectée — tout est réconcilié !")
     else:
-        fcol1, fcol2 = st.columns(2)
-        sources = sorted({a["source"] for a in anomalies})
-        sel_sev = fcol1.multiselect(
-            "Filtrer par gravité", ["haute", "moyenne", "info"],
-            default=["haute", "moyenne", "info"],
-            format_func=lambda s: SEV_BADGE[s],
-        )
-        sel_src = fcol2.multiselect("Filtrer par source", sources, default=sources)
+        st.caption(f"{len(real)} anomalie(s)")
+        st.dataframe(_table(real), use_container_width=True, hide_index=True)
 
-        filtered = [
-            a for a in anomalies
-            if a["severity"] in sel_sev and a["source"] in sel_src
-        ]
-        filtered.sort(key=lambda x: SEV_ORDER.get(x["severity"], 9))
-
-        st.caption(f"{len(filtered)} anomalie(s) affichée(s)")
-        table = pd.DataFrame([{
-            "Gravité": SEV_BADGE[a["severity"]],
-            "Source": a["source"],
-            "Type": a["type"],
-            "Ticket": a.get("ticket_name", ""),
-            "Détail": a["detail"],
-        } for a in filtered])
-        st.dataframe(table, use_container_width=True, hide_index=True)
+    # Infos (rattachements & notes) — pas des anomalies
+    st.divider()
+    st.subheader("🔵 Infos (rattachements & notes)")
+    st.caption("Commandes retrouvées sous un ticket sans numéro, saisies tardives, "
+               "tickets sans numéro non rattachés, écarts globaux. Rien à corriger.")
+    if infos:
+        st.caption(f"{len(infos)} info(s)")
+        st.dataframe(_table(infos), use_container_width=True, hide_index=True)
+    else:
+        st.write("—")
 
     # POS annoté
     st.divider()

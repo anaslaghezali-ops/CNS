@@ -88,13 +88,14 @@
     document.getElementById("results").classList.remove("hidden");
     var sm = state.summary;
 
-    // Métriques
+    // Métriques (les « info » ne comptent pas comme anomalies)
     var metrics = [
       ["Transactions POS", sm.pos_transactions],
       ["Total POS (DH)", Math.round(sm.pos_total).toLocaleString("fr-FR")],
       ["Anomalies", sm.n_anomalies],
       ["🔴 Haute", sm.severity.haute || 0],
       ["🟠 Moyenne", sm.severity.moyenne || 0],
+      ["🔵 Infos", sm.n_infos || 0],
     ];
     document.getElementById("metrics").innerHTML = metrics.map(function (m) {
       return '<div class="metric"><div class="label">' + m[0] +
@@ -134,27 +135,16 @@
     });
 
     document.querySelectorAll(".fsev, .fsrc").forEach(function (cb) {
-      cb.onchange = renderAnomalies;
+      cb.onchange = function () { renderAnomalies(); renderInfos(); };
     });
     document.getElementById("only-anom").onchange = renderPos;
 
     renderAnomalies();
+    renderInfos();
     renderPos();
   }
 
-  function renderAnomalies() {
-    var sev = checkedValues("fsev"), src = checkedValues("fsrc");
-    var rows = state.anomalies.filter(function (a) {
-      return sev.indexOf(a.severity) !== -1 && src.indexOf(a.source) !== -1;
-    }).sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
-
-    document.getElementById("anom-count").textContent = rows.length + " anomalie(s) affichée(s)";
-
-    if (!rows.length) {
-      document.getElementById("anom-table").innerHTML =
-        "<tbody><tr><td>✅ Aucune anomalie pour ces filtres.</td></tr></tbody>";
-      return;
-    }
+  function _tableHTML(rows) {
     var head = "<thead><tr><th>Gravité</th><th>Source</th><th>Type</th>" +
                "<th>Ticket</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
@@ -163,7 +153,32 @@
              "</td><td>" + escapeHtml(a.type) + "</td><td>" +
              escapeHtml(a.ticket_name) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
-    document.getElementById("anom-table").innerHTML = head + body;
+    return head + body;
+  }
+
+  function renderAnomalies() {
+    // Anomalies = Haute + Moyenne uniquement.
+    var sev = checkedValues("fsev"), src = checkedValues("fsrc");
+    var rows = state.anomalies.filter(function (a) {
+      return a.severity !== "info" &&
+             sev.indexOf(a.severity) !== -1 && src.indexOf(a.source) !== -1;
+    }).sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
+
+    document.getElementById("anom-count").textContent = rows.length + " anomalie(s) affichée(s)";
+    document.getElementById("anom-table").innerHTML = rows.length ? _tableHTML(rows) :
+      "<tbody><tr><td>✅ Aucune anomalie pour ces filtres.</td></tr></tbody>";
+  }
+
+  function renderInfos() {
+    // Section Infos = éléments informatifs (rattachements, saisies tardives,
+    // tickets sans numéro, écarts globaux) — NON comptés comme anomalies.
+    var src = checkedValues("fsrc");
+    var rows = state.anomalies.filter(function (a) {
+      return a.severity === "info" && src.indexOf(a.source) !== -1;
+    });
+    document.getElementById("infos-count").textContent = rows.length + " info(s) affichée(s)";
+    document.getElementById("infos-table").innerHTML = rows.length ? _tableHTML(rows) :
+      "<tbody><tr><td>Aucune info pour ces filtres.</td></tr></tbody>";
   }
 
   function renderPos() {
@@ -211,10 +226,10 @@
       ["Commandes Site (période)", sm.site_orders],
       ["Commandes Site hors période (ignorées)", sm.site_excluded || 0],
       ["", ""],
-      ["Anomalies — total", sm.n_anomalies],
+      ["Anomalies (Haute + Moyenne)", sm.n_anomalies],
       ["  dont haute", sm.severity.haute || 0],
       ["  dont moyenne", sm.severity.moyenne || 0],
-      ["  dont info", sm.severity.info || 0],
+      ["Infos (rattachements & notes)", sm.n_infos || 0],
       ["", ""],
     ];
     Object.keys(sm.channels).forEach(function (k) {
@@ -222,10 +237,7 @@
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resume), "Résumé");
 
-    // Anomalies
-    var anom = state.anomalies.slice().sort(function (a, b) {
-      return SEV_ORDER[a.severity] - SEV_ORDER[b.severity];
-    }).map(function (a) {
+    function toRow(a) {
       return {
         "Gravité": SEV_BADGE[a.severity], "Source": a.source, "Type": a.type,
         "Ticket POS": a.ticket_name, "Réf. source": a.source_ref,
@@ -233,9 +245,19 @@
         "Paiement POS": a.payment_pos, "Paiement attendu": a.payment_source,
         "Détail": a.detail,
       };
-    });
+    }
+    var byOrder = function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; };
+
+    // Anomalies (Haute + Moyenne)
+    var anom = state.anomalies.filter(function (a) { return a.severity !== "info"; })
+                              .sort(byOrder).map(toRow);
     if (!anom.length) anom = [{ "Gravité": "✅ Aucune anomalie", "Détail": "Tout est réconcilié." }];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anom), "Anomalies");
+
+    // Infos (rattachements & notes)
+    var infos = state.anomalies.filter(function (a) { return a.severity === "info"; }).map(toRow);
+    if (!infos.length) infos = [{ "Gravité": "—", "Détail": "Aucune info." }];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(infos), "Infos");
 
     // POS annoté
     var posRows = state.pos.map(function (p) {

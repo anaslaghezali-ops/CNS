@@ -405,35 +405,22 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
                 if ok and (best_gap is None or gap < best_gap):
                     best_i, best_row, best_gap = i, t, gap
         if best_row is not None:
+            # Commande retrouvée sous un ticket sans numéro : ce n'est PAS une
+            # anomalie (la commande existe), juste une info de rattachement.
             used_t.add(best_i)
-            pos_df.loc[best_i, "channel_detected"] = CHANNEL_SITE if d["src"] == "Site" else CHANNEL_GLOVO
-            if d["src"] == "Site":
-                pay_note = ""
-                if best_row["payment_type"] != SITE_EXPECTED_PAYMENT:
-                    pay_note = (f" ⚠️ Son paiement est '{best_row['payment_type']}' "
-                                f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
-                anomalies.append(_anomaly(
-                    "Site", "moyenne", "Numéro de commande non saisi",
-                    f"Commande site {d['id']} livrée : présente au POS sous un ticket SANS "
-                    f"numéro (ticket {best_row['ticket_no']}, même montant {d['amount']:.0f} DH, "
-                    f"+{best_gap:.0f} min). Le caissier a oublié de saisir le numéro {d['id']}."
-                    + pay_note,
-                    ticket_name=best_row["ticket_name"] or "(vide)",
-                    pos_datetime=best_row.get("datetime"), source_ref=d["id"],
-                    amount_pos=best_row["total"], amount_source=d["amount"],
-                    payment_pos=best_row["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
-                ))
-            else:
-                anomalies.append(_anomaly(
-                    "Glovo", "info", "Numéro de commande non saisi",
-                    f"Commande Glovo {d['id']} ({d['o']['payment_type']}, {d['amount']:.0f} DH) "
-                    f"présente au POS sous un ticket SANS numéro (ticket {best_row['ticket_no']}, "
-                    f"+{best_gap:.0f} min). Le caissier a oublié de saisir le numéro.",
-                    ticket_name=best_row["ticket_name"] or "(vide)",
-                    pos_datetime=best_row.get("datetime"), source_ref=d["id"],
-                    amount_pos=best_row["total"], amount_source=d["amount"],
-                    payment_pos=best_row["payment_type"],
-                ))
+            pos_df.loc[best_i, "channel_detected"] = (
+                CHANNEL_SITE if d["src"] == "Site" else CHANNEL_GLOVO)
+            extra = f"{d['o']['payment_type']}, " if d["src"] == "Glovo" else ""
+            anomalies.append(_anomaly(
+                d["src"], "info", "Commande rattachée (ticket sans numéro)",
+                f"Commande {d['src']} {d['id']} ({extra}{d['amount']:.0f} DH) retrouvée au "
+                f"POS sous le ticket sans numéro {best_row['ticket_no']} (+{best_gap:.0f} min). "
+                f"Présente — simple oubli de numéro.",
+                ticket_name=best_row["ticket_name"] or "(vide)",
+                pos_datetime=best_row.get("datetime"), source_ref=d["id"],
+                amount_pos=best_row["total"], amount_source=d["amount"],
+                payment_pos=best_row["payment_type"],
+            ))
         elif d["src"] == "Site":
             anomalies.append(_anomaly(
                 "Site", "haute", "Commande livrée absente du POS",
@@ -564,17 +551,23 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
 
 
 def _annotate_pos(pos_df, anomalies):
-    """Ajoute au POS le statut de réconciliation et le détail des anomalies."""
+    """Ajoute au POS le statut de réconciliation et le détail."""
     df = pos_df.copy()
     by_ticket: dict[str, list[str]] = {}
+    sev_ticket: dict[str, set] = {}
     for a in anomalies:
         tn = a.get("ticket_name")
         if tn and tn not in ("", "(vide)"):
             by_ticket.setdefault(str(tn), []).append(f"[{a['type']}] {a['detail']}")
+            sev_ticket.setdefault(str(tn), set()).add(a["severity"])
 
     def status(row):
-        issues = by_ticket.get(str(row["ticket_name"]), [])
-        return "⚠️ Anomalie" if issues else "✅ OK"
+        s = sev_ticket.get(str(row["ticket_name"]), set())
+        if "haute" in s or "moyenne" in s:
+            return "⚠️ Anomalie"
+        if "info" in s:
+            return "ℹ️ Info"
+        return "✅ OK"
 
     def detail(row):
         return " | ".join(by_ticket.get(str(row["ticket_name"]), []))
@@ -594,7 +587,8 @@ def _build_summary(pos_df, anomalies, glovo_df, naps_df, site_df):
         "pos_transactions": len(pos_df),
         "pos_total": float(pd.to_numeric(pos_df["total"], errors="coerce").sum()),
         "channels": channel_counts,
-        "n_anomalies": len(anomalies),
+        "n_anomalies": sev["haute"] + sev["moyenne"],  # « info » = pas des anomalies
+        "n_infos": sev["info"],
         "severity": sev,
         "glovo_orders": 0 if glovo_df is None else int(
             (glovo_df["status"].str.lower() == "delivered").sum()),

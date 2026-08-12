@@ -28,7 +28,7 @@ FILL_MOYENNE = PatternFill("solid", fgColor="FAD7A0")
 FILL_INFO = PatternFill("solid", fgColor="AED6F1")
 
 
-def _anomalies_dataframe(anomalies: list[dict]) -> pd.DataFrame:
+def _anomalies_dataframe(anomalies: list[dict], empty_msg: str) -> pd.DataFrame:
     rows = []
     for a in sorted(anomalies, key=lambda x: SEVERITY_ORDER.get(x["severity"], 9)):
         rows.append({
@@ -44,10 +44,10 @@ def _anomalies_dataframe(anomalies: list[dict]) -> pd.DataFrame:
             "Détail": a["detail"],
         })
     if not rows:
-        rows.append({"Gravité": "✅ Aucune anomalie", "Source": "", "Type": "",
+        rows.append({"Gravité": "—", "Source": "", "Type": "",
                      "Ticket POS": "", "Réf. source": "", "Montant POS": None,
                      "Montant source": None, "Paiement POS": "",
-                     "Paiement attendu": "", "Détail": "Tout est réconcilié."})
+                     "Paiement attendu": "", "Détail": empty_msg})
     return pd.DataFrame(rows)
 
 
@@ -63,10 +63,10 @@ def _summary_dataframe(summary: dict) -> pd.DataFrame:
         ("Commandes Site (période)", summary["site_orders"]),
         ("Commandes Site hors période (ignorées)", summary.get("site_excluded", 0)),
         ("", ""),
-        ("Anomalies — total", summary["n_anomalies"]),
+        ("Anomalies (Haute + Moyenne)", summary["n_anomalies"]),
         ("  dont gravité haute", summary["severity"].get("haute", 0)),
         ("  dont gravité moyenne", summary["severity"].get("moyenne", 0)),
-        ("  dont info", summary["severity"].get("info", 0)),
+        ("Infos (rattachements & notes)", summary.get("n_infos", summary["severity"].get("info", 0))),
         ("", ""),
     ]
     for channel, n in summary["channels"].items():
@@ -99,17 +99,22 @@ def _pos_export_dataframe(pos_annotated: pd.DataFrame) -> pd.DataFrame:
 def build_excel_report(anomalies, pos_annotated, summary) -> bytes:
     """Construit le rapport Excel complet et le renvoie en bytes."""
     buf = io.BytesIO()
+    real = [a for a in anomalies if a["severity"] != "info"]
+    infos = [a for a in anomalies if a["severity"] == "info"]
     df_summary = _summary_dataframe(summary)
-    df_anom = _anomalies_dataframe(anomalies)
+    df_anom = _anomalies_dataframe(real, "Aucune anomalie — tout est réconcilié.")
+    df_infos = _anomalies_dataframe(infos, "Aucune info.")
     df_pos = _pos_export_dataframe(pos_annotated)
 
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_summary.to_excel(writer, sheet_name="Résumé", index=False)
         df_anom.to_excel(writer, sheet_name="Anomalies", index=False)
+        df_infos.to_excel(writer, sheet_name="Infos", index=False)
         df_pos.to_excel(writer, sheet_name="POS annoté", index=False)
 
         _style_sheet(writer.sheets["Résumé"], df_summary)
         _style_anomalies(writer.sheets["Anomalies"], df_anom)
+        _style_anomalies(writer.sheets["Infos"], df_infos)
         _style_pos(writer.sheets["POS annoté"], df_pos)
 
     buf.seek(0)

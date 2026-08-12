@@ -62,12 +62,12 @@
 
       <hr />
       <h2>🚨 Anomalies</h2>
+      <p class="muted">Éléments à corriger (Haute + Moyenne). Les rattachements et notes sont dans la section « Infos » plus bas.</p>
       <div class="filters">
         <div>
           <span class="filter-label">Gravité :</span>
           <label><input type="checkbox" class="fsev" value="haute" checked /> 🔴 Haute</label>
           <label><input type="checkbox" class="fsev" value="moyenne" checked /> 🟠 Moyenne</label>
-          <label><input type="checkbox" class="fsev" value="info" checked /> 🔵 Info</label>
         </div>
         <div id="fsrc-wrap">
           <span class="filter-label">Source :</span>
@@ -75,6 +75,12 @@
       </div>
       <div id="anom-count" class="muted"></div>
       <div class="table-wrap"><table id="anom-table"></table></div>
+
+      <hr />
+      <h2>🔵 Infos <span class="muted" style="font-size:.9rem;font-weight:400">(rattachements & notes — pas des anomalies)</span></h2>
+      <p class="muted">Commandes retrouvées sous un ticket sans numéro, saisies tardives, tickets sans numéro non rattachés, écarts globaux. Rien à corriger — pour information.</p>
+      <div id="infos-count" class="muted"></div>
+      <div class="table-wrap"><table id="infos-table"></table></div>
 
       <hr />
       <h2>🧾 POS annoté</h2>

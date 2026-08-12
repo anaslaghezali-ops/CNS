@@ -392,93 +392,98 @@
       return (a.datetime ? a.datetime.getTime() : 0) - (b.datetime ? b.datetime.getTime() : 0);
     });
 
-    var used = new Set();
+    var used = new Set();       // indices de tickets (pool) consommés
+    var matched = new Set();     // indices de commandes (delivered) appariées
     var MIN = 60000;
-    function claim(idx) { used.add(idx); }
 
-    function nearWindow(g) {
-      return [new Date(g.received_at.getTime() - WINDOW_BEFORE_MIN * MIN),
-              new Date(g.received_at.getTime() + WINDOW_AFTER_MIN * MIN)];
+    function amountMatch(g, p) {
+      return !isNaN(g.subtotal) && !isNaN(p.total) &&
+             Math.abs(p.total - g.subtotal) <= AMOUNT_TOL;
     }
+    function inWindow(g, p, beforeMin, afterMin) {
+      if (!p.datetime || !g.received_at) return false;
+      return p.datetime >= new Date(g.received_at.getTime() - beforeMin * MIN) &&
+             p.datetime <= new Date(g.received_at.getTime() + afterMin * MIN);
+    }
+    // Appariement GLOBAL glouton : on classe toutes les paires (commande, ticket)
+    // éligibles par proximité temporelle croissante et on apparie les plus proches
+    // d'abord — une commande ne peut plus « voler » le ticket d'une autre plus
+    // proche. Le montant sert seulement de léger départage (il n'est pas fiable :
+    // le POS colle tantôt au montant brut W, tantôt au net AP).
+    function assignGlobal(payFilter, beforeMin, afterMin) {
+      var pairs = [];
+      delivered.forEach(function (g, gi) {
+        if (matched.has(gi) || !g.received_at) return;
+        var exp = GLOVO_PAYMENT_MAP[g.payment_type];
+        pool.forEach(function (p, pi) {
+          if (used.has(pi) || !payFilter(p.payment_type, exp)) return;
+          if (!inWindow(g, p, beforeMin, afterMin)) return;
+          var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
+          pairs.push({ gi: gi, pi: pi, cost: gap - (amountMatch(g, p) ? 0.4 : 0) });
+        });
+      });
+      pairs.sort(function (a, b) { return a.cost - b.cost; });
+      var res = [];
+      pairs.forEach(function (pr) {
+        if (matched.has(pr.gi) || used.has(pr.pi)) return;
+        matched.add(pr.gi); used.add(pr.pi); res.push(pr);
+      });
+      return res;
+    }
+    var isExp = function (pt, exp) { return pt === exp; };
+    var isWrong = function (pt, exp) { return pt !== exp; };
 
-    // Passe 1 : fenêtre proche, bon paiement, MÊME montant (appariement sûr).
-    var remaining = [];
-    delivered.forEach(function (g) {
-      if (!g.received_at) { remaining.push(g); return; }
-      var w = nearWindow(g);
-      var idx = glovoNearest(g, pool, used, w[0], w[1], GLOVO_PAYMENT_MAP[g.payment_type], true, false);
-      if (idx >= 0) claim(idx);
-      else remaining.push(g);
+    // Phase 1 : fenêtre proche, BON mode de paiement.
+    assignGlobal(isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
+
+    // Phase 2 : fenêtre proche, MAUVAIS mode de paiement -> erreur de paiement.
+    assignGlobal(isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN).forEach(function (pr) {
+      var g = delivered[pr.gi], p = pool[pr.pi], exp = GLOVO_PAYMENT_MAP[g.payment_type];
+      anomalies.push(anomaly({ source: "Glovo", severity: "haute",
+        type: "Mode de paiement incorrect",
+        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
+                g.subtotal.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
+                p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
+                " à " + hhmm(p.datetime) + ").",
+        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
+        payment_pos: p.payment_type, payment_source: exp }));
     });
 
-    // Passe 2 : fenêtre proche, bon paiement, montant PRIVILÉGIÉ mais non exigé
-    // (le montant Glovo peut différer du POS : promos, frais…).
-    var remaining2 = [];
-    remaining.forEach(function (g) {
+    // Phase 3 : saisie tardive (fenêtre élargie ±120 min, bon mode de paiement).
+    assignGlobal(isExp, 120, 120).forEach(function (pr) {
+      var g = delivered[pr.gi], p = pool[pr.pi];
+      var delay = minutesBetween(p.datetime, g.received_at);
+      anomalies.push(anomaly({ source: "Glovo", severity: "info",
+        type: "Saisie tardive (hors fenêtre 10 min)",
+        detail: "Commande Glovo " + g.order_id + " (" + g.subtotal.toFixed(0) +
+                " DH) reçue à " + hhmm(g.received_at) + ", tapée au POS à " +
+                hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +
+                (delay >= 0 ? "+" : "") + delay.toFixed(0) + " min) — présente mais tardive.",
+        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
+        amount_pos: p.total, amount_source: g.subtotal }));
+    });
+
+    // Commandes non appariées -> passe commune (ticket sans numéro) puis « absente ».
+    delivered.forEach(function (g, gi) {
+      if (matched.has(gi)) return;
       if (!g.received_at) {
         anomalies.push(anomaly({ source: "Glovo", severity: "moyenne",
           type: "Commande Glovo sans heure de réception",
           detail: "Commande Glovo " + g.order_id + " sans heure exploitable — " +
                   "rapprochement manuel nécessaire.", source_ref: g.order_id }));
-        return;
-      }
-      var w = nearWindow(g);
-      var idx = glovoNearest(g, pool, used, w[0], w[1], GLOVO_PAYMENT_MAP[g.payment_type], false, true);
-      if (idx >= 0) claim(idx);
-      else remaining2.push(g);
-    });
-
-    // Passe 3 : fenêtre proche, paiement QUELCONQUE -> erreur de mode de paiement.
-    var remaining3 = [];
-    remaining2.forEach(function (g) {
-      var w = nearWindow(g);
-      var idx = glovoNearest(g, pool, used, w[0], w[1], null, false, true);
-      if (idx >= 0) {
-        var p = pool[idx];
-        claim(idx);
-        var exp = GLOVO_PAYMENT_MAP[g.payment_type];
-        anomalies.push(anomaly({ source: "Glovo", severity: "haute",
-          type: "Mode de paiement incorrect",
-          detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
-                  g.subtotal.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
-                  p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
-                  " à " + hhmm(p.datetime) + ").",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-          payment_pos: p.payment_type, payment_source: exp }));
-      } else remaining3.push(g);
-    });
-
-    // Passe 4 : saisie tardive (fenêtre élargie, bon paiement + même montant).
-    remaining3.forEach(function (g) {
-      var wide = 120 * MIN;
-      var lo = new Date(g.received_at.getTime() - wide);
-      var hi = new Date(g.received_at.getTime() + wide);
-      var idx = glovoNearest(g, pool, used, lo, hi, GLOVO_PAYMENT_MAP[g.payment_type], true, false);
-      if (idx >= 0) {
-        var p = pool[idx];
-        claim(idx);
-        var delay = minutesBetween(p.datetime, g.received_at);
-        anomalies.push(anomaly({ source: "Glovo", severity: "info",
-          type: "Saisie tardive (hors fenêtre 10 min)",
-          detail: "Commande Glovo " + g.order_id + " (" + g.subtotal.toFixed(0) +
-                  " DH) reçue à " + hhmm(g.received_at) + ", tapée au POS à " +
-                  hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +
-                  (delay >= 0 ? "+" : "") + delay.toFixed(0) + " min) — présente mais tardive.",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-          amount_pos: p.total, amount_source: g.subtotal }));
       } else {
-        missing.push(g);  // -> passe commune (ticket sans numéro) puis « absente »
+        missing.push(g);
       }
     });
 
-    // Tickets classés Glovo non appariés (aucune commande Glovo correspondante).
+    // Tickets Glovo non appariés.
     pool.forEach(function (p, i) {
       if (!used.has(i)) {
         anomalies.push(anomaly({ source: "Glovo", severity: "moyenne",
           type: "Ticket Glovo au POS sans commande correspondante",
           detail: "Ticket POS " + p.ticket_name + " (" + hhmm(p.datetime) + ", " +
                   p.payment_type + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
-                  " DH) classé Glovo mais sans commande Glovo de même montant dans la fenêtre.",
+                  " DH) classé Glovo mais sans commande Glovo dans la fenêtre.",
           ticket_name: p.ticket_name, pos_datetime: p.datetime,
           amount_pos: p.total, payment_pos: p.payment_type }));
       }
@@ -507,53 +512,47 @@
       demands.push({ src: "Glovo", ref: g.received_at, amount: g.subtotal,
                      pay: GLOVO_PAYMENT_MAP[g.payment_type], id: g.order_id, o: g });
     });
-    demands.sort(function (a, b) {
-      return (a.ref ? a.ref.getTime() : 0) - (b.ref ? b.ref.getTime() : 0);
+    // Appariement GLOBAL glouton (comme Glovo) : on classe toutes les paires
+    // (commande manquante, ticket sans numéro) éligibles — même montant +
+    // paiement compatible + fenêtre — par proximité temporelle, et on apparie
+    // les plus proches d'abord. Un ticket ne va qu'à une seule commande.
+    var pairs = [];
+    demands.forEach(function (d, di) {
+      if (!d.ref) return;
+      tickets.forEach(function (t, ti) {
+        if (!t.datetime || t.payment_type !== d.pay) return;
+        if (isNaN(t.total) || isNaN(d.amount) || Math.abs(t.total - d.amount) > AMOUNT_TOL) return;
+        var gap = Math.abs(minutesBetween(t.datetime, d.ref));
+        var ok = d.src === "Site"
+          ? gap <= SITE_TYPO_WINDOW_MIN
+          : (t.datetime >= new Date(d.ref.getTime() - WINDOW_BEFORE_MIN * MIN) &&
+             t.datetime <= new Date(d.ref.getTime() + WINDOW_AFTER_MIN * MIN));
+        if (ok) pairs.push({ di: di, ti: ti, gap: gap });
+      });
+    });
+    pairs.sort(function (a, b) { return a.gap - b.gap; });
+    var matchedD = new Set(), usedTi = new Set();
+    pairs.forEach(function (pr) {
+      if (matchedD.has(pr.di) || usedTi.has(pr.ti)) return;
+      matchedD.add(pr.di); usedTi.add(pr.ti);
+      var d = demands[pr.di], best = tickets[pr.ti];
+      usedT.add(best.ticket_no);
+      best.channel = d.src === "Site" ? CH_SITE : CH_GLOVO;
+      // Commande retrouvée sous un ticket sans numéro : info (pas une anomalie).
+      anomalies.push(anomaly({ source: d.src, severity: "info",
+        type: "Commande rattachée (ticket sans numéro)",
+        detail: "Commande " + d.src + " " + d.id + " (" +
+                (d.src === "Glovo" ? d.o.payment_type + ", " : "") + d.amount.toFixed(0) +
+                " DH) retrouvée au POS sous le ticket sans numéro " + best.ticket_no +
+                " (+" + pr.gap.toFixed(0) + " min). Présente — simple oubli de numéro.",
+        ticket_name: best.ticket_name || "(vide)", pos_datetime: best.datetime,
+        source_ref: String(d.id), amount_pos: best.total, amount_source: d.amount,
+        payment_pos: best.payment_type }));
     });
 
-    demands.forEach(function (d) {
-      var best = null, bestGap = Infinity;
-      if (d.ref) {
-        tickets.forEach(function (t) {
-          if (usedT.has(t.ticket_no) || !t.datetime) return;
-          if (t.payment_type !== d.pay) return;                 // paiement compatible
-          if (isNaN(t.total) || isNaN(d.amount) || Math.abs(t.total - d.amount) > AMOUNT_TOL) return;
-          var gap = Math.abs(minutesBetween(t.datetime, d.ref));
-          var ok = d.src === "Site"
-            ? gap <= SITE_TYPO_WINDOW_MIN
-            : (t.datetime >= new Date(d.ref.getTime() - WINDOW_BEFORE_MIN * MIN) &&
-               t.datetime <= new Date(d.ref.getTime() + WINDOW_AFTER_MIN * MIN));
-          if (ok && gap < bestGap) { bestGap = gap; best = t; }
-        });
-      }
-      if (best) {
-        usedT.add(best.ticket_no);
-        best.channel = d.src === "Site" ? CH_SITE : CH_GLOVO;
-        if (d.src === "Site") {
-          var payNote = best.payment_type !== SITE_EXPECTED_PAYMENT ?
-            " ⚠️ Son paiement est '" + best.payment_type + "' au lieu de '" +
-            SITE_EXPECTED_PAYMENT + "'." : "";
-          anomalies.push(anomaly({ source: "Site", severity: "moyenne",
-            type: "Numéro de commande non saisi",
-            detail: "Commande site " + d.id + " livrée : présente au POS sous un ticket SANS " +
-                    "numéro (ticket " + best.ticket_no + ", même montant " + d.amount.toFixed(0) +
-                    " DH, +" + bestGap.toFixed(0) + " min). Le caissier a oublié de saisir le " +
-                    "numéro " + d.id + "." + payNote,
-            ticket_name: best.ticket_name || "(vide)", pos_datetime: best.datetime,
-            source_ref: String(d.id), amount_pos: best.total, amount_source: d.amount,
-            payment_pos: best.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
-        } else {
-          anomalies.push(anomaly({ source: "Glovo", severity: "info",
-            type: "Numéro de commande non saisi",
-            detail: "Commande Glovo " + d.id + " (" + d.o.payment_type + ", " +
-                    d.amount.toFixed(0) + " DH) présente au POS sous un ticket SANS numéro " +
-                    "(ticket " + best.ticket_no + ", +" + bestGap.toFixed(0) + " min). " +
-                    "Le caissier a oublié de saisir le numéro.",
-            ticket_name: best.ticket_name || "(vide)", pos_datetime: best.datetime,
-            source_ref: String(d.id), amount_pos: best.total, amount_source: d.amount,
-            payment_pos: best.payment_type }));
-        }
-      } else if (d.src === "Site") {
+    demands.forEach(function (d, di) {
+      if (matchedD.has(di)) return;
+      if (d.src === "Site") {
         anomalies.push(anomaly({ source: "Site", severity: "haute",
           type: "Commande livrée absente du POS",
           detail: "Commande site " + d.id + " livrée mais introuvable dans le POS.",
@@ -561,9 +560,10 @@
       } else {
         anomalies.push(anomaly({ source: "Glovo", severity: "haute",
           type: "Commande Glovo absente du POS",
-          detail: "Commande Glovo " + d.id + " reçue à " + dateKey(d.ref) + " " +
-                  hhmm(d.ref) + " (" + d.o.payment_type + ", " + d.amount.toFixed(0) +
-                  " DH) non retrouvée au POS (aucun ticket au bon mode de paiement).",
+          detail: "Commande Glovo " + d.id + " reçue à " +
+                  (d.ref ? dateKey(d.ref) + " " + hhmm(d.ref) : "?") + " (" + d.o.payment_type +
+                  ", " + d.amount.toFixed(0) + " DH) non retrouvée au POS " +
+                  "(aucun ticket au bon mode de paiement).",
           source_ref: String(d.id), amount_source: d.amount,
           payment_source: d.pay || "?" }));
       }
@@ -692,17 +692,18 @@
   }
 
   function annotate(pos, anomalies) {
-    var byTicket = {};
+    var byTicket = {}, sevTicket = {};
     anomalies.forEach(function (a) {
       var tn = a.ticket_name;
       if (tn && tn !== "" && tn !== "(vide)") {
         (byTicket[tn] = byTicket[tn] || []).push("[" + a.type + "] " + a.detail);
+        (sevTicket[tn] = sevTicket[tn] || {})[a.severity] = true;
       }
     });
     pos.forEach(function (p) {
-      var issues = byTicket[p.ticket_name] || [];
-      p.statut = issues.length ? "⚠️ Anomalie" : "✅ OK";
-      p.anomalies = issues.join(" | ");
+      var s = sevTicket[p.ticket_name] || {};
+      p.statut = (s.haute || s.moyenne) ? "⚠️ Anomalie" : (s.info ? "ℹ️ Info" : "✅ OK");
+      p.anomalies = (byTicket[p.ticket_name] || []).join(" | ");
     });
   }
 
@@ -716,7 +717,8 @@
       pos_transactions: pos.length,
       pos_total: posTotal,
       channels: channels,
-      n_anomalies: anomalies.length,
+      n_anomalies: sev.haute + sev.moyenne,  // les « info » ne sont pas des anomalies
+      n_infos: sev.info,
       severity: sev,
       glovo_orders: glovo ? glovo.filter(function (g) {
         return (g.status || "").toLowerCase() === "delivered"; }).length : 0,
