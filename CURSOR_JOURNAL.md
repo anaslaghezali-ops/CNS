@@ -141,6 +141,25 @@ réconciliation (nouveau clic « Lancer »). Pas de persistance entre sessions.
 
 ---
 
+### 2026-08-12 — Détail des écarts financiers (anomalies sources)
+
+**Demandé par** : gérant / utilisateur (session Cursor).
+
+**Problème** : l'écart Glovo Online / Cash ne montrait pas **quelles anomalies**
+le composaient (ex. −495 DH Online, −107 DH Cash).
+
+**Règle appliquée** :
+
+- Bouton **🔍 Voir l'écart (N)** sur chaque ligne de réconciliation financière.
+- Panneau détaillé : liste des anomalies en attente qui **contribuent** à cet
+  écart, avec **impact en DH** (+ = source > POS, − = POS > source).
+- Total expliqué vs écart affiché ; validation possible depuis ce panneau.
+
+**Fichiers modifiés** : `docs/reconcile.js` (`lineKey`, `getFinancialContributors`,
+`ecartContributionForAnomaly`), `docs/app.js`, `docs/index.html`, `docs/style.css`.
+
+---
+
 ### Antérieur (branche `claude/chicknster-reconciliation-system-460chx`)
 
 Modifications déjà présentes **avant** la session Cursor du 12 août — ne pas
