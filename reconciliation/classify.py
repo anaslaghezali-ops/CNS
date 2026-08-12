@@ -48,6 +48,11 @@ def classify_ticket_name(ticket_name: str, site_ids: set[str] | None = None) -> 
     if site_ids and name in site_ids:
         return CHANNEL_SITE
 
+    # « Ticket » (placeholder) = le caissier a oublié de saisir le numéro
+    # (ou sp/emp) → à rattacher, comme un ticket sans nom.
+    if name.lower() == "ticket":
+        return CHANNEL_UNASSIGNED
+
     # Normaliser (retirer les espaces internes) pour reconnaître « Sp 3 » = « Sp3 ».
     compact = name.replace(" ", "")
     if _RE_SP_EMP.match(compact):

@@ -66,15 +66,15 @@ SITE_TYPO_WINDOW_MIN = 20  # fenêtre pour détecter une faute de frappe sur le 
 
 
 def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
-    """Rapproche les commandes du site avec le POS (par identifiant)."""
-    anomalies = []
+    """
+    Rapproche le site par NUMÉRO (exact) et par faute de frappe (orphelin
+    5 chiffres). Les tickets SANS numéro sont laissés à la passe commune.
+    Renvoie (anomalies, missing) — commandes livrées non encore rattachées.
+    """
+    anomalies, missing = [], []
     pos_by_name = {r["ticket_name"]: r for _, r in pos_df.iterrows()}
     site_ids = set(site_df["identifiant"].astype(str))
-    matched_pos_names = set()
-
-    # Tickets POS ressemblant à une commande site mais absents du fichier site
-    # (orphelins) — candidats à une faute de frappe sur le numéro.
-    orphans = [p for _, p in pos_df[pos_df["channel_detected"] == CHANNEL_SITE].iterrows()
+    orphans = [(i, p) for i, p in pos_df[pos_df["channel_detected"] == CHANNEL_SITE].iterrows()
                if p["ticket_name"] not in site_ids]
     used_orphan = set()
 
@@ -83,20 +83,17 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
         sid = str(s["identifiant"])
         delivered = str(s.get("delivery_status", "")).upper() == "DELIVERED"
         pos_row = pos_by_name.get(sid)
-
         if delivered:
             if pos_row is None:
-                unmatched_delivered.append(s)  # -> détection faute de frappe
+                unmatched_delivered.append(s)
                 continue
-            matched_pos_names.add(sid)
             if pd.notna(pos_row["total"]) and abs(pos_row["total"] - s["order_total"]) > AMOUNT_TOLERANCE:
                 anomalies.append(_anomaly(
                     "Site", "haute", "Écart de montant",
                     f"Commande site {sid} : {s['order_total']} DH (site) "
                     f"vs {pos_row['total']} DH (POS).",
                     ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                    source_ref=sid, amount_pos=pos_row["total"],
-                    amount_source=s["order_total"],
+                    source_ref=sid, amount_pos=pos_row["total"], amount_source=s["order_total"],
                 ))
             if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
                 anomalies.append(_anomaly(
@@ -107,14 +104,13 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                     source_ref=sid, payment_pos=pos_row["payment_type"],
                     payment_source=SITE_EXPECTED_PAYMENT,
                 ))
-        # Une commande non livrée (refusée/annulée) PEUT être présente au POS
-        # (tapée puis annulée) : ce n'est PAS une anomalie.
+        # Une commande non livrée (refusée/annulée) PEUT être présente au POS.
 
-    # Commandes livrées introuvables : tenter une faute de frappe sur le numéro.
+    # Faute de frappe : orphelin « site-like » (5 chiffres) de même montant/heure.
     for s in unmatched_delivered:
         sid = str(s["identifiant"])
-        best, best_gap = None, None
-        for i, p in enumerate(orphans):
+        best_i, best_row, best_gap = None, None, None
+        for i, p in orphans:
             if i in used_orphan:
                 continue
             if pd.isna(p["total"]) or abs(p["total"] - s["order_total"]) > AMOUNT_TOLERANCE:
@@ -125,35 +121,30 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
             if gap > SITE_TYPO_WINDOW_MIN:
                 continue
             if best_gap is None or gap < best_gap:
-                best, best_gap = i, gap
-        if best is not None:
-            used_orphan.add(best)
-            m = orphans[best]
-            matched_pos_names.add(m["ticket_name"])
+                best_i, best_row, best_gap = i, p, gap
+        if best_row is not None:
+            used_orphan.add(best_i)
+            pos_df.loc[best_i, "channel_detected"] = CHANNEL_SITE
             pay_note = ""
-            if m["payment_type"] != SITE_EXPECTED_PAYMENT:
-                pay_note = (f" ⚠️ De plus, son paiement est '{m['payment_type']}' "
+            if best_row["payment_type"] != SITE_EXPECTED_PAYMENT:
+                pay_note = (f" ⚠️ De plus, son paiement est '{best_row['payment_type']}' "
                             f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
             anomalies.append(_anomaly(
                 "Site", "moyenne", "Numéro de commande mal saisi (faute de frappe)",
                 f"Commande site {sid} livrée : introuvable sous ce numéro, mais le ticket "
-                f"POS {m['ticket_name']} correspond (même montant {s['order_total']:.0f} DH, "
-                f"+{best_gap:.0f} min, et {m['ticket_name']} n'existe pas dans le fichier "
-                f"site). Le caissier a probablement tapé {m['ticket_name']} au lieu de {sid}."
-                + pay_note,
-                ticket_name=m["ticket_name"], pos_datetime=m.get("datetime"),
-                source_ref=sid, amount_pos=m["total"], amount_source=s["order_total"],
-                payment_pos=m["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
+                f"POS {best_row['ticket_name']} correspond (même montant "
+                f"{s['order_total']:.0f} DH, +{best_gap:.0f} min, et {best_row['ticket_name']} "
+                f"n'existe pas dans le fichier site). Le caissier a probablement tapé "
+                f"{best_row['ticket_name']} au lieu de {sid}." + pay_note,
+                ticket_name=best_row["ticket_name"], pos_datetime=best_row.get("datetime"),
+                source_ref=sid, amount_pos=best_row["total"], amount_source=s["order_total"],
+                payment_pos=best_row["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
             ))
         else:
-            anomalies.append(_anomaly(
-                "Site", "haute", "Commande livrée absente du POS",
-                f"Commande site {sid} livrée mais introuvable dans le POS.",
-                source_ref=sid, amount_source=s["order_total"],
-            ))
+            missing.append(s)  # -> passe commune, puis « absente »
 
-    # Orphelins non expliqués par une faute de frappe.
-    for i, p in enumerate(orphans):
+    # Orphelins « site-like » non expliqués.
+    for i, p in orphans:
         if i in used_orphan:
             continue
         anomalies.append(_anomaly(
@@ -163,8 +154,7 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
             ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
             amount_pos=p["total"], payment_pos=p["payment_type"],
         ))
-
-    return anomalies, matched_pos_names
+    return anomalies, missing
 
 
 # --------------------------------------------------------------------------- #
@@ -232,76 +222,71 @@ def reconcile_naps(pos_df: pd.DataFrame, naps_df: pd.DataFrame):
 # GLOVO — rapprochement temporel (le POS est tapé après la réception)
 # --------------------------------------------------------------------------- #
 
-def _glovo_nearest(g, pos_glovo, used, lo, hi, payment=None, require_amount=True):
+def _glovo_nearest(g, pool, used, lo, hi, payment=None,
+                   require_amount=False, prefer_amount=False):
     """
-    Meilleur ticket POS pour une commande Glovo :
-      - dans la fenêtre temporelle [lo, hi],
-      - du bon mode de paiement si `payment` est fourni,
-      - de montant identique (col W = total POS) si `require_amount`,
-      - le plus proche dans le temps en cas d'ex-æquo.
+    Meilleur ticket du pool pour une commande Glovo.
+      payment        : n'accepter que ce mode de paiement (None = indifférent)
+      require_amount : n'accepter qu'un montant identique
+      prefer_amount  : à défaut d'exiger, privilégier un montant identique
+    Priorités : montant identique > ticket Glovo numéroté > proximité temporelle.
+    `pool` est une liste de (index, row).
     """
     g_amount = g.get("subtotal")
-    best_pidx, best_gap = None, None
-    for pidx, p in pos_glovo.iterrows():
-        if pidx in used:
+    best_idx, best_score = None, None
+    for idx, p in pool:
+        if idx in used:
             continue
         dt = p["datetime"]
         if pd.isna(dt) or not (lo <= dt <= hi):
             continue
         if payment is not None and p["payment_type"] != payment:
             continue
-        if require_amount and pd.notna(g_amount) and pd.notna(p["total"]):
-            if abs(p["total"] - g_amount) > AMOUNT_TOLERANCE:
-                continue
-        gap = abs((dt - g["received_at"]).total_seconds())
-        if best_gap is None or gap < best_gap:
-            best_gap, best_pidx = gap, pidx
-    return best_pidx
+        amount_match = (pd.notna(g_amount) and pd.notna(p["total"])
+                        and abs(p["total"] - g_amount) <= AMOUNT_TOLERANCE)
+        if require_amount and not amount_match:
+            continue
+        gap = abs((dt - g["received_at"]).total_seconds()) / 60
+        score = gap + (100000 if (prefer_amount and not amount_match) else 0) \
+                    + (1000 if p["channel_detected"] == CHANNEL_UNASSIGNED else 0)
+        if best_score is None or score < best_score:
+            best_score, best_idx = score, idx
+    return best_idx
 
 
 def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
     """
-    Rapproche les commandes Glovo livrées avec les tickets POS Glovo.
-
-    L'appariement se fait sur **montant (col W) + heure** (bien plus fiable que
-    l'heure seule : 100 % des montants Glovo existent côté POS), en 2 passes :
-      Passe 1 — ticket POS de même montant ET déjà au bon mode de paiement.
-      Passe 2 — ticket POS de même montant mais paiement différent → révèle
-                les VRAIES erreurs de mode de paiement.
-    Les commandes sans ticket de même montant dans la fenêtre sont signalées
-    comme absentes du POS ; l'écart agrégé par mode de paiement (fiable) est
-    calculé en parallèle.
+    Rapproche Glovo avec les tickets POS NUMÉROTÉS (canal Glovo). Les commandes
+    encore introuvables sont renvoyées (passe commune des tickets sans numéro).
+    Renvoie (anomalies, missing). Appariement par HEURE + paiement (le montant
+    Glovo peut différer du POS : promos/frais), en 4 passes.
     """
-    anomalies = []
+    anomalies, missing = [], []
     delivered = glovo_df[glovo_df["status"].str.lower() == "delivered"].copy()
     delivered = delivered.sort_values("received_at")
-    pos_glovo = pos_df[pos_df["channel_detected"] == CHANNEL_GLOVO].copy()
-    pos_glovo = pos_glovo.sort_values("datetime")
+
+    pool = [(i, p) for i, p in pos_df[pos_df["channel_detected"] == CHANNEL_GLOVO].iterrows()]
+    pool.sort(key=lambda t: (t[1]["datetime"] if pd.notna(t[1]["datetime"])
+                             else pd.Timestamp.min))
 
     before = pd.Timedelta(minutes=GLOVO_WINDOW_BEFORE_MIN)
     after = pd.Timedelta(minutes=GLOVO_WINDOW_AFTER_MIN)
+    wide = pd.Timedelta(minutes=120)
     used = set()
-    matches = []  # (glovo_idx, pos_idx)
 
-    # ---- Réconciliation agrégée (fiable) par mode de paiement ----
-    anomalies += _glovo_aggregate(delivered, pos_glovo)
-
-    # ---- Passe 1 : même montant + bon mode de paiement ----
     remaining = []
     for gidx, g in delivered.iterrows():
         if pd.isna(g["received_at"]):
             remaining.append(gidx)
             continue
         lo, hi = g["received_at"] - before, g["received_at"] + after
-        expected = GLOVO_PAYMENT_MAP.get(g["payment_type"])
-        best = _glovo_nearest(g, pos_glovo, used, lo, hi, payment=expected)
+        best = _glovo_nearest(g, pool, used, lo, hi,
+                              payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), require_amount=True)
         if best is not None:
             used.add(best)
-            matches.append((gidx, best))
         else:
             remaining.append(gidx)
 
-    # ---- Passe 2 : même montant, paiement quelconque → erreur de paiement ----
     remaining2 = []
     for gidx in remaining:
         g = delivered.loc[gidx]
@@ -309,66 +294,62 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
             anomalies.append(_anomaly(
                 "Glovo", "moyenne", "Commande Glovo sans heure de réception",
                 f"Commande Glovo {g['order_id']} sans heure exploitable — "
-                f"rapprochement manuel nécessaire.",
-                source_ref=str(g["order_id"]),
+                f"rapprochement manuel nécessaire.", source_ref=str(g["order_id"]),
             ))
             continue
         lo, hi = g["received_at"] - before, g["received_at"] + after
-        best = _glovo_nearest(g, pos_glovo, used, lo, hi, payment=None)
+        best = _glovo_nearest(g, pool, used, lo, hi,
+                              payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), prefer_amount=True)
         if best is not None:
             used.add(best)
-            matches.append((gidx, best))
-            p = pos_glovo.loc[best]
-            expected = GLOVO_PAYMENT_MAP.get(g["payment_type"])
-            anomalies.append(_anomaly(
-                "Glovo", "haute", "Mode de paiement incorrect",
-                f"Commande Glovo {g['order_id']} ({g['payment_type']}, {g['subtotal']:.0f} DH) : "
-                f"attendu '{expected}' au POS, trouvé '{p['payment_type']}' "
-                f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}).",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                source_ref=str(g["order_id"]),
-                payment_pos=p["payment_type"], payment_source=expected,
-            ))
         else:
             remaining2.append(gidx)
 
-    # ---- Passe 3 : rattrapage hors fenêtre (saisie tardive) ----
-    # Même montant + bon mode de paiement, mais au-delà des 10 min.
+    remaining3 = []
     for gidx in remaining2:
         g = delivered.loc[gidx]
-        expected = GLOVO_PAYMENT_MAP.get(g["payment_type"])
-        big = pd.Timedelta(days=1)
-        best = _glovo_nearest(g, pos_glovo, used,
-                              g["received_at"] - big, g["received_at"] + big,
-                              payment=expected)
+        lo, hi = g["received_at"] - before, g["received_at"] + after
+        best = _glovo_nearest(g, pool, used, lo, hi, payment=None, prefer_amount=True)
         if best is not None:
+            p = pos_df.loc[best]
             used.add(best)
-            matches.append((gidx, best))
-            p = pos_glovo.loc[best]
+            exp = GLOVO_PAYMENT_MAP.get(g["payment_type"])
+            anomalies.append(_anomaly(
+                "Glovo", "haute", "Mode de paiement incorrect",
+                f"Commande Glovo {g['order_id']} ({g['payment_type']}, {g['subtotal']:.0f} DH) : "
+                f"attendu '{exp}' au POS, trouvé '{p['payment_type']}' "
+                f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}).",
+                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
+                source_ref=str(g["order_id"]),
+                payment_pos=p["payment_type"], payment_source=exp,
+            ))
+        else:
+            remaining3.append(gidx)
+
+    for gidx in remaining3:
+        g = delivered.loc[gidx]
+        lo, hi = g["received_at"] - wide, g["received_at"] + wide
+        best = _glovo_nearest(g, pool, used, lo, hi,
+                              payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), require_amount=True)
+        if best is not None:
+            p = pos_df.loc[best]
+            used.add(best)
             delay = (p["datetime"] - g["received_at"]).total_seconds() / 60
             anomalies.append(_anomaly(
                 "Glovo", "info", "Saisie tardive (hors fenêtre 10 min)",
                 f"Commande Glovo {g['order_id']} ({g['subtotal']:.0f} DH) reçue à "
                 f"{g['received_at']:%H:%M}, tapée au POS à {p['datetime']:%H:%M} "
-                f"(ticket {p['ticket_name']}, +{delay:.0f} min) — présente mais tardive.",
+                f"(ticket {p['ticket_name']}, {delay:+.0f} min) — présente mais tardive.",
                 ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
                 source_ref=str(g["order_id"]),
                 amount_pos=p["total"], amount_source=g["subtotal"],
             ))
         else:
-            anomalies.append(_anomaly(
-                "Glovo", "haute", "Commande Glovo absente du POS",
-                f"Commande Glovo {g['order_id']} reçue à "
-                f"{g['received_at']:%Y-%m-%d %H:%M} ({g['payment_type']}, "
-                f"{g['subtotal']:.0f} DH) non retrouvée au POS "
-                f"(aucun ticket de même montant et mode de paiement).",
-                source_ref=str(g["order_id"]), amount_source=g.get("subtotal"),
-                payment_source=GLOVO_PAYMENT_MAP.get(g["payment_type"], "?"),
-            ))
+            missing.append(g)  # -> passe commune (ticket sans numéro) puis « absente »
 
-    # ---- Tickets POS Glovo non appariés ----
-    for pidx, p in pos_glovo.iterrows():
-        if pidx not in used:
+    # Tickets classés Glovo non appariés.
+    for idx, p in pool:
+        if idx not in used:
             anomalies.append(_anomaly(
                 "Glovo", "moyenne", "Ticket Glovo au POS sans commande correspondante",
                 f"Ticket POS {p['ticket_name']} ({p['datetime']:%H:%M}, "
@@ -377,18 +358,123 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                 ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
                 amount_pos=p["total"], payment_pos=p["payment_type"],
             ))
+    return anomalies, missing
 
-    return anomalies, dict(matches)
 
-
-def _glovo_aggregate(delivered, pos_glovo):
-    """Compare, par mode de paiement, le nombre de commandes Glovo vs POS."""
+def reconcile_unassigned(pos_df, missing_site, missing_glovo):
+    """
+    Passe COMMUNE : les tickets sans numéro (« Ticket »/vide) sont attribués
+    JOINTEMENT aux commandes Glovo ET Site encore manquantes — à la plus proche
+    en temps, de même montant et de paiement compatible. Un ticket ne peut
+    appartenir qu'à une seule commande, quel que soit le canal.
+    """
     anomalies = []
+    tickets = [(i, p) for i, p in
+               pos_df[pos_df["channel_detected"] == CHANNEL_UNASSIGNED].iterrows()]
+    used_t = set()
+
+    demands = []
+    for s in missing_site:
+        demands.append({"src": "Site", "ref": s.get("created_at"),
+                        "amount": s["order_total"], "pay": SITE_EXPECTED_PAYMENT,
+                        "id": str(s["identifiant"]), "o": s})
+    for g in missing_glovo:
+        demands.append({"src": "Glovo", "ref": g.get("received_at"),
+                        "amount": g["subtotal"], "pay": GLOVO_PAYMENT_MAP.get(g["payment_type"]),
+                        "id": str(g["order_id"]), "o": g})
+    demands.sort(key=lambda d: d["ref"] if pd.notna(d["ref"]) else pd.Timestamp.min)
+
+    before = pd.Timedelta(minutes=GLOVO_WINDOW_BEFORE_MIN)
+    after = pd.Timedelta(minutes=GLOVO_WINDOW_AFTER_MIN)
+
+    for d in demands:
+        best_i, best_row, best_gap = None, None, None
+        if pd.notna(d["ref"]):
+            for i, t in tickets:
+                if i in used_t or pd.isna(t.get("datetime")):
+                    continue
+                if t["payment_type"] != d["pay"]:
+                    continue
+                if pd.isna(t["total"]) or pd.isna(d["amount"]) or abs(t["total"] - d["amount"]) > AMOUNT_TOLERANCE:
+                    continue
+                gap = abs((t["datetime"] - d["ref"]).total_seconds()) / 60
+                if d["src"] == "Site":
+                    ok = gap <= SITE_TYPO_WINDOW_MIN
+                else:
+                    ok = (d["ref"] - before) <= t["datetime"] <= (d["ref"] + after)
+                if ok and (best_gap is None or gap < best_gap):
+                    best_i, best_row, best_gap = i, t, gap
+        if best_row is not None:
+            used_t.add(best_i)
+            pos_df.loc[best_i, "channel_detected"] = CHANNEL_SITE if d["src"] == "Site" else CHANNEL_GLOVO
+            if d["src"] == "Site":
+                pay_note = ""
+                if best_row["payment_type"] != SITE_EXPECTED_PAYMENT:
+                    pay_note = (f" ⚠️ Son paiement est '{best_row['payment_type']}' "
+                                f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
+                anomalies.append(_anomaly(
+                    "Site", "moyenne", "Numéro de commande non saisi",
+                    f"Commande site {d['id']} livrée : présente au POS sous un ticket SANS "
+                    f"numéro (ticket {best_row['ticket_no']}, même montant {d['amount']:.0f} DH, "
+                    f"+{best_gap:.0f} min). Le caissier a oublié de saisir le numéro {d['id']}."
+                    + pay_note,
+                    ticket_name=best_row["ticket_name"] or "(vide)",
+                    pos_datetime=best_row.get("datetime"), source_ref=d["id"],
+                    amount_pos=best_row["total"], amount_source=d["amount"],
+                    payment_pos=best_row["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
+                ))
+            else:
+                anomalies.append(_anomaly(
+                    "Glovo", "info", "Numéro de commande non saisi",
+                    f"Commande Glovo {d['id']} ({d['o']['payment_type']}, {d['amount']:.0f} DH) "
+                    f"présente au POS sous un ticket SANS numéro (ticket {best_row['ticket_no']}, "
+                    f"+{best_gap:.0f} min). Le caissier a oublié de saisir le numéro.",
+                    ticket_name=best_row["ticket_name"] or "(vide)",
+                    pos_datetime=best_row.get("datetime"), source_ref=d["id"],
+                    amount_pos=best_row["total"], amount_source=d["amount"],
+                    payment_pos=best_row["payment_type"],
+                ))
+        elif d["src"] == "Site":
+            anomalies.append(_anomaly(
+                "Site", "haute", "Commande livrée absente du POS",
+                f"Commande site {d['id']} livrée mais introuvable dans le POS.",
+                source_ref=d["id"], amount_source=d["amount"],
+            ))
+        else:
+            g = d["o"]
+            anomalies.append(_anomaly(
+                "Glovo", "haute", "Commande Glovo absente du POS",
+                f"Commande Glovo {d['id']} reçue à {g['received_at']:%Y-%m-%d %H:%M} "
+                f"({g['payment_type']}, {d['amount']:.0f} DH) non retrouvée au POS "
+                f"(aucun ticket au bon mode de paiement).",
+                source_ref=d["id"], amount_source=d["amount"],
+                payment_source=d["pay"] or "?",
+            ))
+
+    # Tickets sans numéro restants -> à rattacher.
+    for i, p in tickets:
+        if i in used_t:
+            continue
+        anomalies.append(_anomaly(
+            "POS", "info", "Ticket sans numéro (à rattacher)",
+            f"Ticket {p['ticket_no']} du {p['datetime']:%Y-%m-%d} à {p['datetime']:%H:%M} "
+            f"({p['payment_type']}, {p['total']} DH) sans numéro — non rattaché à "
+            f"une commande Glovo ni Site.",
+            ticket_name=p["ticket_name"] or "(vide)", pos_datetime=p.get("datetime"),
+            amount_pos=p["total"], payment_pos=p["payment_type"],
+        ))
+    return anomalies
+
+
+def glovo_aggregate(pos_df, glovo_df):
+    """Écart global par mode de paiement (info), sur canaux finaux."""
+    anomalies = []
+    delivered = glovo_df[glovo_df["status"].str.lower() == "delivered"]
+    pos_glovo = pos_df[pos_df["channel_detected"] == CHANNEL_GLOVO]
     glovo_online = int((delivered["payment_type"] == "Online").sum())
     glovo_cash = int((delivered["payment_type"] == "Cash").sum())
     pos_bt = int((pos_glovo["payment_type"] == "Bank Transfer").sum())
     pos_cash = int((pos_glovo["payment_type"] == "Cash").sum())
-
     if glovo_online != pos_bt:
         anomalies.append(_anomaly(
             "Glovo", "info", "Écart global paiement en ligne",
@@ -417,35 +503,10 @@ def reconcile_dinein(pos_df: pd.DataFrame):
             anomalies.append(_anomaly(
                 "Sur place", "moyenne", "Mode de paiement inattendu (sur place/emporter)",
                 f"Ticket {p['ticket_name']} sur place/emporter payé "
-                f"'{p['payment_type']}' (attendu Credit card ou Bank Transfer).",
+                f"'{p['payment_type']}' (attendu Cash ou Credit card).",
                 ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
                 amount_pos=p["total"], payment_pos=p["payment_type"],
             ))
-    return anomalies
-
-
-def flag_unassigned(pos_df: pd.DataFrame, glovo_df: pd.DataFrame | None = None):
-    """Signale les tickets POS sans nom, avec suggestion de rattachement Glovo."""
-    anomalies = []
-    unassigned = pos_df[pos_df["channel_detected"] == CHANNEL_UNASSIGNED]
-    for _, p in unassigned.iterrows():
-        hint = ""
-        if glovo_df is not None and pd.notna(p.get("datetime")):
-            delivered = glovo_df[glovo_df["status"].str.lower() == "delivered"]
-            near = delivered.assign(
-                gap=(p["datetime"] - delivered["received_at"]).abs()
-            ).nsmallest(1, "gap")
-            if not near.empty:
-                r = near.iloc[0]
-                hint = (f" Suggestion : commande Glovo {r['order_id']} "
-                        f"reçue à {r['received_at']:%H:%M}.")
-        anomalies.append(_anomaly(
-            "POS", "moyenne", "Ticket sans nom (à rattacher)",
-            f"Ticket {p['ticket_no']} à {p['datetime']:%H:%M} "
-            f"({p['payment_type']}, {p['total']} DH) sans ticket name.{hint}",
-            ticket_name="(vide)", pos_datetime=p.get("datetime"),
-            amount_pos=p["total"], payment_pos=p["payment_type"],
-        ))
     return anomalies
 
 
@@ -474,19 +535,23 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
         site_excluded = int((~mask).sum())
         site_df = site_df[mask].reset_index(drop=True)
 
+    # 1) Rapprochements par NUMÉRO (canaux disjoints).
+    # 2) Passe COMMUNE : tickets sans numéro attribués jointement (Glovo + Site).
     all_anomalies = []
-    glovo_matches = {}
+    missing_site, missing_glovo = [], []
 
     if site_df is not None:
-        a, _ = reconcile_site(pos, site_df)
+        a, missing_site = reconcile_site(pos, site_df)
         all_anomalies += a
     if naps_df is not None:
         all_anomalies += reconcile_naps(pos, naps_df)
     if glovo_df is not None:
-        a, glovo_matches = reconcile_glovo(pos, glovo_df)
+        a, missing_glovo = reconcile_glovo(pos, glovo_df)
         all_anomalies += a
     all_anomalies += reconcile_dinein(pos)
-    all_anomalies += flag_unassigned(pos, glovo_df)
+    all_anomalies += reconcile_unassigned(pos, missing_site, missing_glovo)
+    if glovo_df is not None:
+        all_anomalies += glovo_aggregate(pos, glovo_df)
 
     pos_annotated = _annotate_pos(pos, all_anomalies)
     summary = _build_summary(pos, all_anomalies, glovo_df, naps_df, site_df)
