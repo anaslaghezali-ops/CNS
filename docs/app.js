@@ -244,7 +244,7 @@
   function listViewPosUsers() {
     var vs = getViewState();
     if (!vs || !vs.pos) return [];
-    return CNS.listPosUsers(vs.pos);
+    return CNS.listPosUsersWithActivity(vs.pos);
   }
 
   function isUnattributedCashContrib(t) {
@@ -468,7 +468,7 @@
             (t.lineKey === "site_cash" ? "Site emporter" :
               (t.lineKey === "naps_tpe_over" ? "TPE CB" : t.lineKey));
           var opts = posUsers.map(function (u) {
-            return "<option value='" + escapeAttr(u) + "'>" + escapeHtml(u) + "</option>";
+            return "<option value='" + escapeAttr(u.user) + "'>" + escapeHtml(u.label) + "</option>";
           }).join("");
           html += "<tr><td>" + escapeHtml(t.when || "") + "</td>" +
             "<td>" + escapeHtml(lineLbl) + "</td>" +

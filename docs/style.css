@@ -211,7 +211,7 @@ tbody tr:hover { background: #fbfbfb; }
 .cc-user-table { font-size: .9rem; }
 .cc-user-table th { font-size: .78rem; }
 .cc-assign-cell { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.cc-user-select { font-size: .85rem; padding: 4px 8px; max-width: 180px; }
+.cc-user-select { font-size: .85rem; padding: 4px 8px; max-width: 320px; }
 .btn-assign-cash, .btn-unassign-cash {
   font-size: .78rem; padding: 4px 10px; border-radius: 4px; cursor: pointer;
   border: 1px solid #c9a227; background: #fff8e6; color: #7a5a10;

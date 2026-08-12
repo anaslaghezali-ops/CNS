@@ -2344,14 +2344,45 @@
     return cc;
   }
 
-  function listPosUsers(pos) {
-    var set = {};
+  function posUserActivityLabel(user, first, last) {
+    if (!first && !last) return user;
+    var f = first ? hhmm(first) : "?";
+    var l = last ? hhmm(last) : "?";
+    if (f === l) return "(" + f + ") " + user;
+    return "(" + f + " – " + l + ") " + user;
+  }
+
+  /** Users POS avec 1re et dernière commande (heure) pour affectation manuelle. */
+  function listPosUsersWithActivity(pos) {
+    var map = {};
     if (!pos) return [];
     pos.forEach(function (p) {
       var u = s(p.user);
-      if (u) set[u] = true;
+      if (!u) return;
+      var dt = p.datetime;
+      if (!map[u]) map[u] = { user: u, first: dt, last: dt };
+      else if (dt) {
+        if (!map[u].first || dt < map[u].first) map[u].first = dt;
+        if (!map[u].last || dt > map[u].last) map[u].last = dt;
+      }
     });
-    return Object.keys(set).sort();
+    return Object.keys(map).map(function (u) {
+      var m = map[u];
+      return {
+        user: m.user,
+        first: m.first,
+        last: m.last,
+        label: posUserActivityLabel(m.user, m.first, m.last),
+      };
+    }).sort(function (a, b) {
+      var ta = a.first ? a.first.getTime() : 0;
+      var tb = b.first ? b.first.getTime() : 0;
+      return ta - tb;
+    });
+  }
+
+  function listPosUsers(pos) {
+    return listPosUsersWithActivity(pos).map(function (x) { return x.user; });
   }
 
   /** Totaux POS par mode de paiement avec split canal (Glovo / SP&EMP / Site). */
@@ -2598,6 +2629,7 @@
     enrichCashToCollectByUser: enrichCashToCollectByUser,
     applyCashUserAssignments: applyCashUserAssignments,
     listPosUsers: listPosUsers,
+    listPosUsersWithActivity: listPosUsersWithActivity,
     CASH_COLLECT_UNATTRIBUTED: CASH_COLLECT_UNATTRIBUTED,
     getFinancialContributors: getFinancialContributors,
     ecartContributionForAnomaly: ecartContributionForAnomaly,
