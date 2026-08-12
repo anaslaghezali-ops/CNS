@@ -232,7 +232,7 @@ def _glovo_nearest(g, pool, used, lo, hi, payment=None,
     Priorités : montant identique > ticket Glovo numéroté > proximité temporelle.
     `pool` est une liste de (index, row).
     """
-    g_amount = g.get("subtotal")
+    g_amount = g.get("amount")
     best_idx, best_score = None, None
     for idx, p in pool:
         if idx in used:
@@ -316,7 +316,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
             exp = GLOVO_PAYMENT_MAP.get(g["payment_type"])
             anomalies.append(_anomaly(
                 "Glovo", "haute", "Mode de paiement incorrect",
-                f"Commande Glovo {g['order_id']} ({g['payment_type']}, {g['subtotal']:.0f} DH) : "
+                f"Commande Glovo {g['order_id']} ({g['payment_type']}, {g['amount']:.0f} DH) : "
                 f"attendu '{exp}' au POS, trouvé '{p['payment_type']}' "
                 f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}).",
                 ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
@@ -337,12 +337,12 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
             delay = (p["datetime"] - g["received_at"]).total_seconds() / 60
             anomalies.append(_anomaly(
                 "Glovo", "info", "Saisie tardive (hors fenêtre 10 min)",
-                f"Commande Glovo {g['order_id']} ({g['subtotal']:.0f} DH) reçue à "
+                f"Commande Glovo {g['order_id']} ({g['amount']:.0f} DH) reçue à "
                 f"{g['received_at']:%H:%M}, tapée au POS à {p['datetime']:%H:%M} "
                 f"(ticket {p['ticket_name']}, {delay:+.0f} min) — présente mais tardive.",
                 ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
                 source_ref=str(g["order_id"]),
-                amount_pos=p["total"], amount_source=g["subtotal"],
+                amount_pos=p["total"], amount_source=g["amount"],
             ))
         else:
             missing.append(g)  # -> passe commune (ticket sans numéro) puis « absente »
@@ -380,7 +380,7 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
                         "id": str(s["identifiant"]), "o": s})
     for g in missing_glovo:
         demands.append({"src": "Glovo", "ref": g.get("received_at"),
-                        "amount": g["subtotal"], "pay": GLOVO_PAYMENT_MAP.get(g["payment_type"]),
+                        "amount": g["amount"], "pay": GLOVO_PAYMENT_MAP.get(g["payment_type"]),
                         "id": str(g["order_id"]), "o": g})
     demands.sort(key=lambda d: d["ref"] if pd.notna(d["ref"]) else pd.Timestamp.min)
 

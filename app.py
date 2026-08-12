@@ -50,7 +50,7 @@ with st.expander("ℹ️ Comment ça marche ?", expanded=False):
         **Règles appliquées :**
         - Tickets POS `1-3 chiffres` → **Glovo** · `5 chiffres` → **Site** ·
           `sp…/emp…` → **Sur place / Emporter**.
-        - Glovo : `Online`→`Bank Transfer`, `Cash`→`Cash` · montant col W ·
+        - Glovo : `Online`→`Bank Transfer`, `Cash`→`Cash` · montant col W − col AE ·
           saisie ≤ 10 min après réception.
         - NAPS : toutes en `Credit card`, rapprochées par date + montant.
         - Site : identifiant = ticket name · une commande **livrée** doit être
