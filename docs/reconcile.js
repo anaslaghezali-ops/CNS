@@ -106,6 +106,8 @@
   /** Écart de saisie plausible sur un même ticket (au-delà : ce n'est pas la même commande). */
   var AMOUNT_MISMATCH_MAX_RATIO = 0.3;
   var AMOUNT_TOL = 0.5;
+  /** « Même montant » à l'arrondi près : POS et source n'ont pas toujours les mêmes centimes. */
+  var SAME_AMOUNT_TOL = 1;
   /** Journée caisse POS : de 03:00 à 02:59 le lendemain (pas minuit–minuit). */
   var POS_BUSINESS_DAY_START_HOUR = 3;
 
@@ -180,6 +182,12 @@
     }
     if (!parts.length) return d;
     return d + (d ? " — " : "") + parts.join(" · ");
+  }
+
+  /** Même montant à l'arrondi près (ex. 189,60 DH source vs 190 DH POS). */
+  function sameAmountRounded(a, b) {
+    if (a == null || b == null || isNaN(a) || isNaN(b)) return false;
+    return Math.abs(a - b) <= SAME_AMOUNT_TOL;
   }
 
   function anomalyId(a) {
@@ -874,7 +882,7 @@
           if (p.channel !== CH_DINEIN && p.channel !== CH_OTHER) return;
           if (p.matched_glovo_order || wrongNameUsed.has(p.ticket_no)) return;
           if (p.payment_type !== exp) return;
-          if (!amountMatch(g, p)) return;
+          if (!sameAmountRounded(p.total, g.amount)) return;
           if (!inWindow(g, p, beforeMin, afterMin)) return;
           pairs.push({ gi: gi, p: p, exp: exp,
                        gap: Math.abs(minutesBetween(p.datetime, g.received_at)) });
@@ -1534,6 +1542,123 @@
     });
   }
 
+  // ----------------------------------------------------------------------- //
+  // PASSE FINALE : recouper les anomalies entre elles.
+  // Une commande « absente du POS » + un ticket POS « anormal » qui ont le même
+  // montant, sont proches dans le temps et partagent le mode de paiement attendu
+  // (ou un contenu de commande proche) sont la MÊME opération : le caissier a
+  // tapé un mauvais nom de ticket. Les deux anomalies sont fusionnées en une.
+  // ----------------------------------------------------------------------- //
+  var LINK_ORDER_ANOM_TYPES = [
+    "Commande Glovo absente du POS",
+    "Commande livrée absente du POS",
+  ];
+  var LINK_POS_ANOM_TYPES = [
+    "Mode de paiement inattendu (sur place/emporter)",
+    "Ticket sans numéro (à rattacher)",
+    "Ticket Glovo au POS sans commande correspondante",
+    "Ticket Site au POS sans commande correspondante",
+    "Ticket non rattaché → SP&EMP",
+  ];
+  /** Signal minimal (hors montant + heure) pour fusionner deux anomalies. */
+  var LINK_MIN_PRODUCT_SIM = 0.3;
+
+  function linkRelatedAnomalies(pos, glovo, site, anomalies) {
+    var orderAnoms = anomalies.filter(function (a) {
+      return LINK_ORDER_ANOM_TYPES.indexOf(a.type) >= 0;
+    });
+    var posAnoms = anomalies.filter(function (a) {
+      return LINK_POS_ANOM_TYPES.indexOf(a.type) >= 0 && a.pos_ticket_no;
+    });
+    if (!orderAnoms.length || !posAnoms.length) return anomalies;
+
+    var glovoById = {}, siteById = {};
+    (glovo || []).forEach(function (g) { glovoById[String(g.order_id)] = g; });
+    (site || []).forEach(function (o) { siteById[String(o.identifiant)] = o; });
+
+    var pairs = [];
+    orderAnoms.forEach(function (oa) {
+      var isGlovo = oa.source === "Glovo";
+      var g = isGlovo ? glovoById[String(oa.source_ref)] : null;
+      var o = isGlovo ? null : siteById[String(oa.source_ref)];
+      if (!g && !o) return;
+      var srcAmt = isGlovo ? g.amount : o.order_total;
+      var srcWhen = isGlovo ? g.received_at : o.created_at;
+      if (isNaN(srcAmt) || !srcWhen) return;
+      var srcItems = isGlovo ? (g.order_items || "") : "";
+      var expPay = isGlovo ? GLOVO_PAYMENT_MAP[g.payment_type]
+        : (siteOrderIsTakeout(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT);
+
+      posAnoms.forEach(function (pa) {
+        var p = findPosByTicketNo(pos, pa.pos_ticket_no);
+        if (!p || p.matched_glovo_order || !p.datetime) return;
+        if (!sameAmountRounded(p.total, srcAmt)) return;
+        var gap = Math.abs(minutesBetween(p.datetime, srcWhen));
+        if (gap > MAX_LATE_ENTRY_MIN) return;
+        var samePay = isGlovo
+          ? p.payment_type === expPay
+          : (siteOrderIsTakeout(o) ? isAllDineinPayments(p.payment_type)
+                                   : p.payment_type === SITE_EXPECTED_PAYMENT);
+        var sim = (srcItems && p.designations)
+          ? productSimilarity(p.designations, srcItems) : 0;
+        if (!samePay && sim < LINK_MIN_PRODUCT_SIM) return;
+        pairs.push({
+          oa: oa, pa: pa, p: p, g: g, o: o, isGlovo: isGlovo, gap: gap,
+          samePay: samePay, sim: sim, expPay: expPay, srcAmt: srcAmt,
+          srcWhen: srcWhen,
+          cost: gap - (samePay ? 30 : 0) - sim * 20,
+        });
+      });
+    });
+    if (!pairs.length) return anomalies;
+
+    pairs.sort(function (a, b) { return a.cost - b.cost; });
+    var usedOrder = {}, usedTicket = {}, removeIds = {}, added = [];
+    pairs.forEach(function (pr) {
+      var oKey = String(pr.oa.source_ref);
+      if (usedOrder[oKey] || usedTicket[pr.pa.pos_ticket_no]) return;
+      usedOrder[oKey] = true;
+      usedTicket[pr.pa.pos_ticket_no] = true;
+      removeIds[pr.oa.id] = true;
+      removeIds[pr.pa.id] = true;
+
+      var p = pr.p;
+      var src = pr.isGlovo ? "Glovo" : "Site";
+      var srcId = pr.isGlovo ? pr.g.order_id : pr.o.identifiant;
+      if (pr.isGlovo) markGlovoPosMatch(pr.g, p);
+      p.channel = pr.isGlovo ? CH_GLOVO : CH_SITE;
+      p.channel_match = pr.isGlovo ? "glovo_wrong_name" : "site_wrong_name";
+
+      var proofs = ["même montant (" + pr.srcAmt.toFixed(0) + " DH)",
+                    pr.gap.toFixed(0) + " min d'écart"];
+      if (pr.samePay) proofs.push("mode de paiement attendu (" + p.payment_type + ")");
+      if (pr.sim >= 0.2) proofs.push("produits ~" + Math.round(pr.sim * 100) + " % compatibles");
+      var payWarn = pr.samePay ? "" :
+        " ⚠️ De plus, le mode de paiement au POS ('" + p.payment_type +
+        "') n'est pas celui attendu ('" + pr.expPay + "').";
+
+      added.push(posAnomaly(p, {
+        source: src, severity: "haute",
+        type: "Numéro de ticket mal saisi (" + src + ")",
+        detail: "Commande " + src + " " + srcId + " (" +
+          (pr.isGlovo ? pr.g.payment_type + ", " : "") + pr.srcAmt.toFixed(0) +
+          " DH, reçue à " + hhmm(pr.srcWhen) + ") et ticket POS « " +
+          (p.ticket_name || p.ticket_no) + " » (" + hhmm(p.datetime) + ", " +
+          p.payment_type + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
+          " DH) sont la MÊME opération : " + proofs.join(", ") +
+          ". Le caissier a tapé « " + (p.ticket_name || p.ticket_no) +
+          " » au lieu du numéro de commande " + src +
+          " (2 anomalies regroupées : commande absente + ticket anormal)." + payWarn,
+        source_ref: String(srcId),
+        amount_pos: p.total, amount_source: pr.srcAmt,
+        payment_pos: p.payment_type,
+        payment_source: pr.expPay,
+      }));
+    });
+
+    return anomalies.filter(function (a) { return !removeIds[a.id]; }).concat(added);
+  }
+
   function markGlovoPosMatch(g, p) {
     if (!g || !p) return;
     g.matched_pos_ticket_no = p.ticket_no;
@@ -1948,6 +2073,9 @@
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
     anomalies = resolveUnattachedAsSpemp(pos, naps, anomalies);
     anomalies = anomalies.concat(reconcileDinein(pos));
+    // Passe finale : recouper les anomalies restantes entre elles (mauvais nom de
+    // ticket) AVANT les contrôles de nombre, pour que les compteurs soient justes.
+    anomalies = linkRelatedAnomalies(pos, glovo, site, anomalies);
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
     anomalies = detectDuplicates(pos, anomalies, glovo);  // doublons/corrections
     appendFinancialGapAnomalies(pos, glovo, site, anomalies);

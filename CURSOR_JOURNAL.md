@@ -779,6 +779,38 @@ détail par canal.
 
 ---
 
+### 2026-08-12 — Passe finale : recouper les anomalies entre elles
+
+**Demandé par** : gérant — « une fois qu'il termine, il doit refaire un tour sur les
+anomalies pour voir si il n'y a pas des anomalies connectées entre elles ». Cas resté
+non résolu : commande Glovo 101718699078 (Online 190 DH, 21:55) « absente du POS » +
+ticket Sp235 (BT 190 DH, 21:56) « mode de paiement inattendu » = même opération.
+
+**Causes du non-appariement** :
+1. Les phases Glovo ne comparaient que les tickets **déjà classés Glovo** (n° 1–3
+   chiffres) ; un ticket nommé « Sp235 » n'était dans aucun pool.
+2. Le « même montant » exigeait ≤ 0,5 DH : les centimes de Glovo (W−AE) contre un
+   total POS arrondi pouvaient dépasser cette tolérance.
+
+**Règles ajoutées** :
+- `SAME_AMOUNT_TOL = 1` DH (`sameAmountRounded`) pour « même montant » à l'arrondi près.
+- `linkRelatedAnomalies(pos, glovo, site, anomalies)` — passe finale, **avant** les
+  contrôles de nombre : croise les anomalies « commande absente du POS » (Glovo/Site)
+  avec les anomalies POS restantes (paiement inattendu SP/EMP, ticket sans numéro,
+  ticket orphelin Glovo/Site, ticket non rattaché). Critères : **même montant** (±1 DH),
+  **≤ 60 min**, et **mode de paiement attendu OU produits ≥ 30 % compatibles**.
+  Les 2 anomalies sont **fusionnées** en une seule « Numéro de ticket mal saisi (Glovo/Site) »
+  (haute), le ticket est reclassé Glovo/Site et la commande marquée appariée.
+  Si le mode de paiement diffère aussi, un ⚠️ le signale dans le détail.
+
+**Impact** : le ticket compte dans le bon canal (ex. +190 DH en Glovo Bank Transfer,
+−190 DH en SP&EMP), les écarts de nombre et l'écart financier se résorbent.
+Non-régression vérifiée sur POS+NAPS+Site réels (174 anomalies, 0 fusion parasite).
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
