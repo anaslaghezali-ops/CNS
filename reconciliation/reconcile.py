@@ -62,6 +62,9 @@ def _anomaly(source, severity, type_, detail, *, ticket_name="", pos_datetime=No
 # SITE
 # --------------------------------------------------------------------------- #
 
+SITE_TYPO_WINDOW_MIN = 20  # fenêtre pour détecter une faute de frappe sur le n°
+
+
 def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
     """Rapproche les commandes du site avec le POS (par identifiant)."""
     anomalies = []
@@ -69,6 +72,13 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
     site_ids = set(site_df["identifiant"].astype(str))
     matched_pos_names = set()
 
+    # Tickets POS ressemblant à une commande site mais absents du fichier site
+    # (orphelins) — candidats à une faute de frappe sur le numéro.
+    orphans = [p for _, p in pos_df[pos_df["channel_detected"] == CHANNEL_SITE].iterrows()
+               if p["ticket_name"] not in site_ids]
+    used_orphan = set()
+
+    unmatched_delivered = []
     for _, s in site_df.iterrows():
         sid = str(s["identifiant"])
         delivered = str(s.get("delivery_status", "")).upper() == "DELIVERED"
@@ -76,56 +86,91 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
 
         if delivered:
             if pos_row is None:
+                unmatched_delivered.append(s)  # -> détection faute de frappe
+                continue
+            matched_pos_names.add(sid)
+            if pd.notna(pos_row["total"]) and abs(pos_row["total"] - s["order_total"]) > AMOUNT_TOLERANCE:
                 anomalies.append(_anomaly(
-                    "Site", "haute", "Commande livrée absente du POS",
-                    f"Commande site {sid} livrée mais introuvable dans le POS.",
-                    source_ref=sid, amount_source=s["order_total"],
-                ))
-            else:
-                matched_pos_names.add(sid)
-                # Montant
-                if pd.notna(pos_row["total"]) and abs(pos_row["total"] - s["order_total"]) > AMOUNT_TOLERANCE:
-                    anomalies.append(_anomaly(
-                        "Site", "haute", "Écart de montant",
-                        f"Commande site {sid} : {s['order_total']} DH (site) "
-                        f"vs {pos_row['total']} DH (POS).",
-                        ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                        source_ref=sid, amount_pos=pos_row["total"],
-                        amount_source=s["order_total"],
-                    ))
-                # Paiement
-                if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
-                    anomalies.append(_anomaly(
-                        "Site", "haute", "Mode de paiement incorrect",
-                        f"Commande site {sid} : attendu '{SITE_EXPECTED_PAYMENT}', "
-                        f"trouvé '{pos_row['payment_type']}' au POS.",
-                        ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                        source_ref=sid, payment_pos=pos_row["payment_type"],
-                        payment_source=SITE_EXPECTED_PAYMENT,
-                    ))
-        else:
-            # Commande non livrée (refusée) : ne doit PAS être au POS
-            if pos_row is not None:
-                matched_pos_names.add(sid)
-                anomalies.append(_anomaly(
-                    "Site", "haute", "Commande non livrée mais tapée au POS",
-                    f"Commande site {sid} refusée/non livrée "
-                    f"(statut '{s.get('last_status','')}') mais présente au POS.",
+                    "Site", "haute", "Écart de montant",
+                    f"Commande site {sid} : {s['order_total']} DH (site) "
+                    f"vs {pos_row['total']} DH (POS).",
                     ticket_name=sid, pos_datetime=pos_row.get("datetime"),
                     source_ref=sid, amount_pos=pos_row["total"],
+                    amount_source=s["order_total"],
                 ))
-
-    # Tickets POS classés Site mais absents du fichier site
-    pos_site = pos_df[pos_df["channel_detected"] == CHANNEL_SITE]
-    for _, p in pos_site.iterrows():
-        if p["ticket_name"] not in site_ids:
+            if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
+                anomalies.append(_anomaly(
+                    "Site", "haute", "Mode de paiement incorrect",
+                    f"Commande site {sid} : attendu '{SITE_EXPECTED_PAYMENT}', "
+                    f"trouvé '{pos_row['payment_type']}' au POS.",
+                    ticket_name=sid, pos_datetime=pos_row.get("datetime"),
+                    source_ref=sid, payment_pos=pos_row["payment_type"],
+                    payment_source=SITE_EXPECTED_PAYMENT,
+                ))
+        elif pos_row is not None:
+            # Commande non livrée (refusée) : ne doit PAS être au POS
+            matched_pos_names.add(sid)
             anomalies.append(_anomaly(
-                "Site", "moyenne", "Ticket Site au POS sans commande correspondante",
-                f"Ticket POS {p['ticket_name']} ressemble à une commande site "
-                f"mais n'existe pas dans le fichier site.",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                amount_pos=p["total"], payment_pos=p["payment_type"],
+                "Site", "haute", "Commande non livrée mais tapée au POS",
+                f"Commande site {sid} refusée/non livrée "
+                f"(statut '{s.get('last_status','')}') mais présente au POS.",
+                ticket_name=sid, pos_datetime=pos_row.get("datetime"),
+                source_ref=sid, amount_pos=pos_row["total"],
             ))
+
+    # Commandes livrées introuvables : tenter une faute de frappe sur le numéro.
+    for s in unmatched_delivered:
+        sid = str(s["identifiant"])
+        best, best_gap = None, None
+        for i, p in enumerate(orphans):
+            if i in used_orphan:
+                continue
+            if pd.isna(p["total"]) or abs(p["total"] - s["order_total"]) > AMOUNT_TOLERANCE:
+                continue
+            if pd.isna(p.get("datetime")) or pd.isna(s.get("created_at")):
+                continue
+            gap = abs((p["datetime"] - s["created_at"]).total_seconds()) / 60
+            if gap > SITE_TYPO_WINDOW_MIN:
+                continue
+            if best_gap is None or gap < best_gap:
+                best, best_gap = i, gap
+        if best is not None:
+            used_orphan.add(best)
+            m = orphans[best]
+            matched_pos_names.add(m["ticket_name"])
+            pay_note = ""
+            if m["payment_type"] != SITE_EXPECTED_PAYMENT:
+                pay_note = (f" ⚠️ De plus, son paiement est '{m['payment_type']}' "
+                            f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
+            anomalies.append(_anomaly(
+                "Site", "moyenne", "Numéro de commande mal saisi (faute de frappe)",
+                f"Commande site {sid} livrée : introuvable sous ce numéro, mais le ticket "
+                f"POS {m['ticket_name']} correspond (même montant {s['order_total']:.0f} DH, "
+                f"+{best_gap:.0f} min, et {m['ticket_name']} n'existe pas dans le fichier "
+                f"site). Le caissier a probablement tapé {m['ticket_name']} au lieu de {sid}."
+                + pay_note,
+                ticket_name=m["ticket_name"], pos_datetime=m.get("datetime"),
+                source_ref=sid, amount_pos=m["total"], amount_source=s["order_total"],
+                payment_pos=m["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
+            ))
+        else:
+            anomalies.append(_anomaly(
+                "Site", "haute", "Commande livrée absente du POS",
+                f"Commande site {sid} livrée mais introuvable dans le POS.",
+                source_ref=sid, amount_source=s["order_total"],
+            ))
+
+    # Orphelins non expliqués par une faute de frappe.
+    for i, p in enumerate(orphans):
+        if i in used_orphan:
+            continue
+        anomalies.append(_anomaly(
+            "Site", "moyenne", "Ticket Site au POS sans commande correspondante",
+            f"Ticket POS {p['ticket_name']} ressemble à une commande site "
+            f"mais n'existe pas dans le fichier site.",
+            ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
+            amount_pos=p["total"], payment_pos=p["payment_type"],
+        ))
 
     return anomalies, matched_pos_names
 

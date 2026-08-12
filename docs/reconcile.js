@@ -194,61 +194,101 @@
   // ----------------------------------------------------------------------- //
   // SITE
   // ----------------------------------------------------------------------- //
+  // Fenêtre pour détecter une faute de frappe sur le numéro de commande site.
+  var SITE_TYPO_WINDOW_MIN = 20;
+
   function reconcileSite(pos, site) {
     var anomalies = [];
     var byName = {};
     pos.forEach(function (p) { byName[p.ticket_name] = p; });
     var siteIds = new Set(site.map(function (x) { return x.identifiant; }));
 
+    // Tickets POS ressemblant à une commande site mais absents du fichier site
+    // (orphelins) — candidats à une faute de frappe sur le numéro.
+    var orphans = pos.filter(function (p) {
+      return p.channel === CH_SITE && !siteIds.has(p.ticket_name);
+    });
+    var usedOrphan = new Set();
+
+    var unmatchedDelivered = [];
     site.forEach(function (o) {
       var sid = o.identifiant;
       var delivered = (o.delivery_status || "").toUpperCase() === "DELIVERED";
       var p = byName[sid];
       if (delivered) {
-        if (!p) {
+        if (!p) { unmatchedDelivered.push(o); return; }  // -> détection faute de frappe
+        if (!isNaN(p.total) && Math.abs(p.total - o.order_total) > AMOUNT_TOL) {
           anomalies.push(anomaly({ source: "Site", severity: "haute",
-            type: "Commande livrée absente du POS",
-            detail: "Commande site " + sid + " livrée mais introuvable dans le POS.",
-            source_ref: sid, amount_source: o.order_total }));
-        } else {
-          if (!isNaN(p.total) && Math.abs(p.total - o.order_total) > AMOUNT_TOL) {
-            anomalies.push(anomaly({ source: "Site", severity: "haute",
-              type: "Écart de montant",
-              detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
-                      p.total + " DH (POS).",
-              ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-              amount_pos: p.total, amount_source: o.order_total }));
-          }
-          if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
-            anomalies.push(anomaly({ source: "Site", severity: "haute",
-              type: "Mode de paiement incorrect",
-              detail: "Commande site " + sid + " : attendu '" + SITE_EXPECTED_PAYMENT +
-                      "', trouvé '" + p.payment_type + "' au POS.",
-              ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-              payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
-          }
-        }
-      } else {
-        if (p) {
-          anomalies.push(anomaly({ source: "Site", severity: "haute",
-            type: "Commande non livrée mais tapée au POS",
-            detail: "Commande site " + sid + " refusée/non livrée (statut '" +
-                    o.last_status + "') mais présente au POS.",
+            type: "Écart de montant",
+            detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
+                    p.total + " DH (POS).",
             ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-            amount_pos: p.total }));
+            amount_pos: p.total, amount_source: o.order_total }));
         }
+        if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
+          anomalies.push(anomaly({ source: "Site", severity: "haute",
+            type: "Mode de paiement incorrect",
+            detail: "Commande site " + sid + " : attendu '" + SITE_EXPECTED_PAYMENT +
+                    "', trouvé '" + p.payment_type + "' au POS.",
+            ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
+            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
+        }
+      } else if (p) {
+        anomalies.push(anomaly({ source: "Site", severity: "haute",
+          type: "Commande non livrée mais tapée au POS",
+          detail: "Commande site " + sid + " refusée/non livrée (statut '" +
+                  o.last_status + "') mais présente au POS.",
+          ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
+          amount_pos: p.total }));
       }
     });
 
-    pos.forEach(function (p) {
-      if (p.channel === CH_SITE && !siteIds.has(p.ticket_name)) {
-        anomalies.push(anomaly({ source: "Site", severity: "moyenne",
-          type: "Ticket Site au POS sans commande correspondante",
-          detail: "Ticket POS " + p.ticket_name + " ressemble à une commande site " +
-                  "mais n'existe pas dans le fichier site.",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime,
-          amount_pos: p.total, payment_pos: p.payment_type }));
+    // Commandes livrées introuvables : tenter une faute de frappe sur le numéro.
+    unmatchedDelivered.forEach(function (o) {
+      var sid = o.identifiant;
+      var best = -1, bestGap = Infinity;
+      for (var i = 0; i < orphans.length; i++) {
+        if (usedOrphan.has(i)) continue;
+        var p = orphans[i];
+        if (isNaN(p.total) || Math.abs(p.total - o.order_total) > AMOUNT_TOL) continue;
+        if (!p.datetime || !o.created_at) continue;
+        var gap = Math.abs(minutesBetween(p.datetime, o.created_at));
+        if (gap > SITE_TYPO_WINDOW_MIN) continue;
+        if (gap < bestGap) { bestGap = gap; best = i; }
       }
+      if (best >= 0) {
+        usedOrphan.add(best);
+        var m = orphans[best];
+        var payNote = m.payment_type !== SITE_EXPECTED_PAYMENT ?
+          " ⚠️ De plus, son paiement est '" + m.payment_type + "' au lieu de '" +
+          SITE_EXPECTED_PAYMENT + "'." : "";
+        anomalies.push(anomaly({ source: "Site", severity: "moyenne",
+          type: "Numéro de commande mal saisi (faute de frappe)",
+          detail: "Commande site " + sid + " livrée : introuvable sous ce numéro, mais le " +
+                  "ticket POS " + m.ticket_name + " correspond (même montant " +
+                  o.order_total.toFixed(0) + " DH, +" + bestGap.toFixed(0) + " min, et " +
+                  m.ticket_name + " n'existe pas dans le fichier site). Le caissier a " +
+                  "probablement tapé " + m.ticket_name + " au lieu de " + sid + "." + payNote,
+          ticket_name: m.ticket_name, pos_datetime: m.datetime, source_ref: sid,
+          amount_pos: m.total, amount_source: o.order_total,
+          payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
+      } else {
+        anomalies.push(anomaly({ source: "Site", severity: "haute",
+          type: "Commande livrée absente du POS",
+          detail: "Commande site " + sid + " livrée mais introuvable dans le POS.",
+          source_ref: sid, amount_source: o.order_total }));
+      }
+    });
+
+    // Orphelins non expliqués par une faute de frappe.
+    orphans.forEach(function (p, i) {
+      if (usedOrphan.has(i)) return;
+      anomalies.push(anomaly({ source: "Site", severity: "moyenne",
+        type: "Ticket Site au POS sans commande correspondante",
+        detail: "Ticket POS " + p.ticket_name + " ressemble à une commande site " +
+                "mais n'existe pas dans le fichier site.",
+        ticket_name: p.ticket_name, pos_datetime: p.datetime,
+        amount_pos: p.total, payment_pos: p.payment_type }));
     });
     return anomalies;
   }
