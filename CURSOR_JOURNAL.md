@@ -446,6 +446,25 @@ tout en gardant le récapitulatif général.
 
 ---
 
+### 2026-08-12 — TPE NAPS : section « Totaux alignés » (appariement sans écart)
+
+**Demandé par** : gérant — cas 110 DH POS CB vs 95+15 DH NAPS : pas d'écart financier,
+mais 3 anomalies d'appariement. Objectif : voir immédiatement que c'est OK si total POS CB = total NAPS.
+
+**Règle** : si sur une journée `sum(POS Credit card) = sum(NAPS)` mais l'appariement
+transaction par transaction échoue, marquer les anomalies `naps_totals_ok` et afficher
+une section verte **✅ TPE — Totaux alignés** avec le détail des deux côtés.
+
+**UI** :
+- Section entre réconciliation financière et anomalies
+- Compteurs : ces lignes ne comptent plus dans « Anomalies » mais dans « TPE totaux OK »
+- Table anomalies : sous-section avec badge ✅ Totaux OK
+- Ligne financière NAPS : note si totaux alignés
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
