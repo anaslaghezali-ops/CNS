@@ -1837,6 +1837,10 @@
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
     summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
+    if (summary.financial && summary.financial.cash_to_collect) {
+      finalizeCashToCollectUsers(summary.financial.cash_to_collect, pos, glovo, site,
+        naps, posDates, anomalies);
+    }
     return {
       anomalies: anomalies, pos: pos, glovo: glovo, naps: naps, site: site,
       summary: summary,
@@ -2015,7 +2019,6 @@
 
     var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCounter, siteCashSrc,
       posSiteCash, posSiteCC);
-    enrichCashToCollectByUser(cash_to_collect, pos, glovo, site, naps, posDates);
 
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines,
              payment_breakdown: payment_breakdown,
@@ -2328,16 +2331,49 @@
     return contribs;
   }
 
-  /** Ventile le cash à collecter par utilisateur POS (colonne F « User »). */
-  function enrichCashToCollectByUser(cc, pos, glovo, site, naps, posDates) {
+  /** CB POS sans NAPS — source fiable : anomalies « Paiement POS absent du TPE » + User colonne F. */
+  function collectNapsTpeFromAnomalies(pos, anomalies) {
+    var contribs = [];
+    if (!anomalies || !anomalies.length) return contribs;
+    var byTicket = {};
+    pos.forEach(function (p) { if (p.ticket_no) byTicket[p.ticket_no] = p; });
+    anomalies.forEach(function (a) {
+      if (a.type !== "Paiement POS absent du TPE") return;
+      var p = a.pos_ticket_no ? byTicket[a.pos_ticket_no] : null;
+      var amt = a.amount_pos;
+      if (amt == null || isNaN(amt)) amt = p && !isNaN(p.total) ? p.total : 0;
+      if (amt <= AMOUNT_TOL) return;
+      contribs.push({
+        user: p ? posUserLabel(p) : CASH_COLLECT_UNATTRIBUTED,
+        amount: amt,
+        lineKey: "naps_tpe_over",
+        ticket_no: a.pos_ticket_no || (p && p.ticket_no) || "",
+        ticket_name: a.ticket_name || (p && p.ticket_name) || "",
+        when: a.when || (p && dtFull(p.datetime)) || "",
+        detail: "Ticket " + (a.ticket_name || (p && p.ticket_name) || "?") +
+          " — CB " + amt.toFixed(0) + " DH au POS sans ligne NAPS",
+        anomaly_id: a.id,
+      });
+    });
+    return contribs;
+  }
+
+  function finalizeCashToCollectUsers(cc, pos, glovo, site, naps, posDates, anomalies) {
     if (!cc) return cc;
     var contribs = collectGlovoCashContributions(pos, glovo);
     contribs = contribs.concat(collectSiteEmporterContributions(pos, site));
-    contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
+    var napsAnom = collectNapsTpeFromAnomalies(pos, anomalies);
+    if (napsAnom.length) contribs = contribs.concat(napsAnom);
+    else contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
     stampCashContributions(contribs);
     cc.ticket_contributions = contribs;
     cc.by_user = aggregateCashCollectByUser(contribs);
     return cc;
+  }
+
+  /** Ventile le cash à collecter par utilisateur POS (colonne F « User »). */
+  function enrichCashToCollectByUser(cc, pos, glovo, site, naps, posDates) {
+    return finalizeCashToCollectUsers(cc, pos, glovo, site, naps, posDates, null);
   }
 
   /**
@@ -2646,6 +2682,7 @@
     sumFinancialAdjustments: sumFinancialAdjustments,
     applyFinancialAdjustments: applyFinancialAdjustments,
     enrichCashToCollectByUser: enrichCashToCollectByUser,
+    finalizeCashToCollectUsers: finalizeCashToCollectUsers,
     applyCashUserAssignments: applyCashUserAssignments,
     listPosUsers: listPosUsers,
     listPosUsersWithActivity: listPosUsersWithActivity,

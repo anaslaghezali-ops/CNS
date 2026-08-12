@@ -222,9 +222,9 @@
 
   function enrichFinCashCollect(fin, viewState) {
     if (!fin || !fin.cash_to_collect || !viewState || !viewState.pos) return fin;
-    CNS.enrichCashToCollectByUser(
+    CNS.finalizeCashToCollectUsers(
       fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.naps,
-      viewState.site, CNS.listPosDates(viewState.pos));
+      viewState.site, CNS.listPosDates(viewState.pos), viewState.anomalies || []);
     CNS.applyCashUserAssignments(fin.cash_to_collect, state.cashUserAssignments || {});
     return fin;
   }
@@ -428,6 +428,44 @@
         "cash physique attendu : <b>" + fmtDH(cc.cash_expected_physical) + "</b>.</p>";
     }
 
+    if (cc.by_user && cc.by_user.length && cc.net_to_collect > 0) {
+      var toCollectUsers = cc.by_user.filter(function (u) { return u.net_to_collect > 0.5; });
+      if (toCollectUsers.length) {
+        html += '<div class="cc-collect-who"><b>À récupérer par utilisateur :</b> ' +
+          toCollectUsers.map(function (u) {
+            return "<span class='cc-who-chip'><b>" + escapeHtml(u.user) + "</b> +" +
+              fmtDH(u.net_to_collect) + "</span>";
+          }).join("") + "</div>";
+      }
+    }
+
+    if (cc.by_user && cc.by_user.length) {
+      var withNetEarly = cc.by_user.filter(function (u) {
+        return Math.abs(u.net_to_collect) >= 0.5 || u.to_collect >= 0.5 || u.over_recorded >= 0.5;
+      });
+      if (withNetEarly.length && cc.net_to_collect > 0) {
+        html += "<h3 class='cc-user-title'>Qui doit rendre quoi (colonne F POS)</h3>";
+        html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
+          "<th>Utilisateur</th><th>À collecter</th><th>Sur-saisie</th><th>Net</th>" +
+          "<th>Glovo Cash</th><th>Site emporter</th><th>TPE CB</th></tr></thead><tbody>";
+        withNetEarly.forEach(function (u) {
+          var bl = u.by_line || {};
+          var netCls = u.net_to_collect > 0 ? "cc-ecart-pos" :
+            (u.net_to_collect < 0 ? "cc-ecart-neg" : "");
+          html += "<tr><td><b>" + escapeHtml(u.user) + "</b></td>" +
+            "<td>" + fmtDH(u.to_collect) + "</td>" +
+            "<td>" + (u.over_recorded > 0 ? fmtDH(u.over_recorded) : "—") + "</td>" +
+            "<td class='" + netCls + "'><b>" +
+            (u.net_to_collect > 0 ? "+" + fmtDH(u.net_to_collect) : fmtDH(u.net_to_collect)) +
+            "</b></td>" +
+            "<td>" + fmtDH(bl.glovo_cash || 0) + "</td>" +
+            "<td>" + fmtDH(bl.site_cash || 0) + "</td>" +
+            "<td>" + fmtDH(bl.naps_tpe_over || 0) + "</td></tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+    }
+
     var detail = cc.items.filter(function (it) {
       return Math.abs(it.collect_amount || 0) >= 0.5;
     });
@@ -512,7 +550,7 @@
       var withNet = cc.by_user.filter(function (u) {
         return Math.abs(u.net_to_collect) >= 0.5 || u.to_collect >= 0.5 || u.over_recorded >= 0.5;
       });
-      if (withNet.length) {
+      if (withNet.length && cc.net_to_collect <= 0) {
         html += "<h3 class='cc-user-title'>Par utilisateur (colonne F du POS)</h3>";
         html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
           "<th>Utilisateur</th><th>À collecter</th><th>Sur-saisie</th><th>Net</th>" +
