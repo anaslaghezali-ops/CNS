@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-08-12 · 8";
+  var BUILD = "2026-08-12 · 9";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
@@ -357,6 +357,26 @@
   var RE_1_3 = /^\d{1,3}$/;
   var RE_5 = /^\d{5}$/;
   var RE_SPEMP = /^\d*(sp|emp)\d*$/i;
+
+  /**
+   * Pourquoi ce nom de ticket n'a pas été reconnu comme un ticket Glovo.
+   * Rappel : le n° de commande Glovo (12 chiffres) n'est JAMAIS tapé au POS —
+   * le caissier saisit le n° de séquence Glovo du jour, de 1 à 3 chiffres.
+   */
+  function ticketNameFormatNote(name) {
+    var n = s(name);
+    if (n === "" || n.toLowerCase() === "nan") return "ce ticket n'a pas de numéro";
+    if (n.toLowerCase() === "ticket") return "ce ticket n'a pas de numéro (« Ticket »)";
+    if (RE_SPEMP.test(n.replace(/\s/g, ""))) {
+      return "« " + n + " » est un libellé sur place / emporter";
+    }
+    if (RE_5.test(n)) return "« " + n + " » est au format d'une commande site (5 chiffres)";
+    if (/^\d{4,}$/.test(n)) {
+      return "« " + n + " » a " + n.length +
+             " chiffres alors qu'un ticket Glovo en a 1 à 3";
+    }
+    return "« " + n + " » n'est pas un numéro de ticket Glovo (1 à 3 chiffres attendus)";
+  }
 
   function classifyDetail(name, siteIds) {
     var n = s(name);
@@ -912,11 +932,12 @@
           detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
             g.amount.toFixed(0) + " DH" +
             (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") +
-            ") introuvable sous son numéro — le ticket POS « " + p.ticket_name +
+            ") sans ticket au canal Glovo. Le ticket POS « " + p.ticket_name +
             " » (à " + hhmm(p.datetime) + ", " + p.payment_type + ", " +
             p.total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min) correspond " +
-            "exactement (même montant, même mode de paiement). Le caissier a tapé « " +
-            p.ticket_name + " » au lieu du numéro de commande Glovo.",
+            "exactement (même montant, même mode de paiement), mais " +
+            ticketNameFormatNote(p.ticket_name) + " : il a été compté en « " +
+            p.channel + " ». À corriger au POS : n° de ticket Glovo (1 à 3 chiffres).",
           source_ref: g.order_id,
           amount_pos: p.total, amount_source: g.amount,
           payment_pos: p.payment_type,
@@ -1740,6 +1761,11 @@
         " ⚠️ De plus, le mode de paiement au POS ('" + p.payment_type +
         "') n'est pas celui attendu ('" + pr.expPay + "').";
 
+      // Glovo : le n° de commande n'est jamais tapé, on attend un n° de 1 à 3 chiffres.
+      // Site : le n° de commande (5 chiffres) est bien celui à taper au POS.
+      var expectedNumber = pr.isGlovo
+        ? "un numéro de ticket Glovo (1 à 3 chiffres)"
+        : "le numéro de commande site « " + srcId + " » (5 chiffres)";
       added.push(posAnomaly(p, {
         source: src, severity: "haute",
         type: "Numéro de ticket mal saisi (" + src + ")",
@@ -1748,10 +1774,9 @@
           " DH, reçue à " + hhmm(pr.srcWhen) + ") et ticket POS « " +
           (p.ticket_name || p.ticket_no) + " » (" + hhmm(p.datetime) + ", " +
           p.payment_type + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
-          " DH) sont la MÊME opération : " + proofs.join(", ") +
-          ". Le caissier a tapé « " + (p.ticket_name || p.ticket_no) +
-          " » au lieu du numéro de commande " + src +
-          " (2 anomalies regroupées : commande absente + ticket anormal)." + payWarn,
+          " DH) sont la MÊME opération : " + proofs.join(", ") + ". Or " +
+          ticketNameFormatNote(p.ticket_name) + ", donc le ticket a été compté en « " +
+          p.channel + " ». À corriger au POS : " + expectedNumber + "." + payWarn,
         source_ref: String(srcId),
         amount_pos: p.total, amount_source: pr.srcAmt,
         payment_pos: p.payment_type,

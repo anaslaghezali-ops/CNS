@@ -930,6 +930,28 @@ résultats idempotents.
 
 ---
 
+### 2026-08-12 — Message corrigé : le n° de commande Glovo n'est jamais tapé
+
+**Signalé par** : gérant — « je n'ai pas compris *introuvable sous son numéro* ; on a dit
+que le numéro de commande Glovo n'est jamais tapé à l'identique, un ticket Glovo contient
+un numéro de 1 à 3 chiffres ».
+
+**Correction** : le libellé était faux. Nouveau `ticketNameFormatNote(name)` qui explique
+**pourquoi** le ticket n'a pas été reconnu comme Glovo, et message reformulé dans les deux
+passes :
+- 4 chiffres et plus → « « 1143 » a 4 chiffres alors qu'un ticket Glovo en a 1 à 3 »
+- libellé sp/emp → « « Sp235 » est un libellé sur place / emporter »
+- 5 chiffres → « au format d'une commande site »
+- vide / « Ticket » → « ce ticket n'a pas de numéro »
+
+Le message indique le canal réellement compté et **l'action** : n° de ticket Glovo
+(1 à 3 chiffres) pour Glovo, n° de commande site (5 chiffres) pour le Site — puisque
+côté Site, contrairement à Glovo, l'identifiant de commande **est** celui à saisir.
+
+**Fichiers** : `docs/reconcile.js` (version `2026-08-12 · 9`)
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
