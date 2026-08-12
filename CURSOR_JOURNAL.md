@@ -861,6 +861,36 @@ rapprochement des anomalies qui ont exactement les mêmes montants ? ». Cas Glo
 
 ---
 
+### 2026-08-12 — 🐞 CAUSE RACINE : état d'appariement partagé entre les runs
+
+**Symptôme** : sur l'**onglet journalier** (19 juil.), la commande Glovo 101718699078
+restait « absente du POS » et Sp235 gardait « Mode de paiement inattendu », alors que la
+**vue générale** rapprochait correctement les deux. Le rapport de 2ᵉ passe a donné le
+verdict décisif : candidat Sp235, 190,00 DH, 0,00 DH d'écart, 1 min →
+**« déjà rattaché à la commande 101718699078 »**.
+
+**Cause** : `app.js` appelle `run(pos, …)` (vue générale) **puis**
+`runDailyBreakdown(pos, …)`, qui rappelait `run()` sur **les mêmes objets** de ligne.
+`addChannel()` réinitialisait `p.channel` mais **pas** `p.matched_glovo_order` /
+`g.matched_pos_ticket_no` : le ticket arrivait « déjà rattaché » dans le run du jour,
+donc écarté de la 1ʳᵉ passe (nom de ticket) et de la 2ᵉ passe. Effet miroir : les runs
+journaliers écrasaient aussi l'état de la vue générale (dernier jour gagnant).
+
+**Fix** :
+1. `resetReconcileState(pos, glovo)` en tête de `run()` — efface `matched_glovo_order`,
+   `matched_pos_ticket_no`, `matched_pos`, `_naps_split_*`, `statut`, `anomalies`.
+2. `runDailyBreakdown()` réconcilie chaque journée sur des **copies** (`cloneRows`)
+   de POS / Glovo / NAPS / Site (`null` préservé = fichier absent), pour que les onglets
+   n'altèrent plus la vue générale ni les autres journées.
+
+**Vérifié** : vue générale et onglet 19 juil. donnent le même verdict (Sp235 → Glovo,
+« Numéro Glovo mal saisi au POS », plus d'anomalie SP/EMP) ; résultats **idempotents**
+sur 2 exécutions consécutives ; non-régression POS+NAPS+Site (174 anomalies, 26 jours).
+
+**Fichiers** : `docs/reconcile.js` (version `2026-08-12 · 7`)
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

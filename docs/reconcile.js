@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-08-12 · 6";
+  var BUILD = "2026-08-12 · 7";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
@@ -2141,7 +2141,27 @@
     return { kept: kept, excluded: excluded };
   }
 
+  /**
+   * Efface les marques d'appariement d'une exécution précédente : `run()` est rappelé
+   * sur les mêmes objets (vue générale puis onglets journaliers). Sans ce nettoyage,
+   * un ticket resté « déjà rattaché » ne peut plus être rapproché.
+   */
+  function resetReconcileState(pos, glovo) {
+    (pos || []).forEach(function (p) {
+      delete p.matched_glovo_order;
+      delete p._naps_split_cc;
+      delete p._naps_split_row;
+      delete p.statut;
+      delete p.anomalies;
+    });
+    (glovo || []).forEach(function (g) {
+      delete g.matched_pos_ticket_no;
+      delete g.matched_pos;
+    });
+  }
+
   function run(pos, glovo, naps, site) {
+    resetReconcileState(pos, glovo);
     var siteIds = site ? new Set(site.map(function (x) { return x.identifiant; })) : null;
     addChannel(pos, siteIds);
 
@@ -2236,12 +2256,24 @@
     return Array.from(posDateSet(pos)).sort();
   }
 
+  /** Copie de surface des lignes : chaque journée travaille sur ses propres objets. */
+  function cloneRows(rows) {
+    if (!rows) return rows;   // null / undefined = « fichier absent », à préserver
+    return rows.map(function (r) {
+      var c = {};
+      for (var k in r) if (Object.prototype.hasOwnProperty.call(r, k)) c[k] = r[k];
+      return c;
+    });
+  }
+
+  // Chaque journée est réconciliée sur des COPIES : les marques d'appariement d'un
+  // onglet ne doivent pas polluer la vue générale ni les autres journées.
   function runDailyBreakdown(pos, glovo, naps, site) {
     var byDay = {};
     listPosDates(pos).forEach(function (dk) {
       var dayPos = pos.filter(function (p) { return posBusinessDateKey(p.datetime) === dk; });
       if (!dayPos.length) return;
-      byDay[dk] = run(dayPos, glovo, naps, site);
+      byDay[dk] = run(cloneRows(dayPos), cloneRows(glovo), cloneRows(naps), cloneRows(site));
     });
     return byDay;
   }
