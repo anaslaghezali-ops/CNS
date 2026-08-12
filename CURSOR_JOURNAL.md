@@ -836,6 +836,31 @@ montants étant pourtant affichés « 190 DH » (arrondi à l'entier partout dan
 
 ---
 
+### 2026-08-12 — 2ᵉ passe visible dans l'UI (rapport de rapprochement)
+
+**Demandé par** : gérant — « après la 1ʳᵉ réconciliation, y a-t-il une 2ᵉ tentative de
+rapprochement des anomalies qui ont exactement les mêmes montants ? ». Cas Glovo
+101718699078 / Sp235 toujours non rapproché sur ses données, sans explication visible.
+
+**Ajouts** :
+- `run()` renvoie **`link_report`** = `{ merged, unresolved }`, alimenté par les **deux**
+  passes : 1ʳᵉ passe (`assignWrongTicketName` dans `reconcileGlovo`) et 2ᵉ passe
+  (`linkRelatedAnomalies`).
+- La 2ᵉ passe évalue **tous** les tickets POS à moins d'une heure (plus seulement ceux
+  déjà porteurs d'une anomalie) et enregistre pour chacun : heure, écart temps, montant
+  POS **au centime**, écart de montant, paiement, canal, similitude produits, anomalie
+  POS existante, **verdict** (« rapprochable » ou raison du refus).
+- Nouvelle section UI **« 🔗 2ᵉ passe — rapprochement des anomalies entre elles »** :
+  tableau des fusions (avec la passe d'origine) + par commande non résolue, la liste
+  des candidats et le motif de rejet.
+- Rappel : un ticket **sans anomalie** n'est jamais rapproché automatiquement (ce serait
+  reclasser une vente comptoir normale) mais il apparaît au rapport.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+(version `2026-08-12 · 6`)
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

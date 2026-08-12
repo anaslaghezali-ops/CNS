@@ -344,6 +344,7 @@
     renderCashToCollect(getAdjustedFinancial());
     renderFinancial(getAdjustedFinancial());
     renderNapsBalanced();
+    renderLinkReport();
     renderSpempReview();
 
     var sources = uniq(activeAnomalies().map(function (a) { return a.source; }));
@@ -716,6 +717,87 @@
       return "<td><b>" + fmtDH(colTot[p]) + "</b></td>"; }).join("") +
       "<td><b>" + fmtDH(grand) + "</b></td></tr></tbody>";
     document.getElementById("fin-matrix").innerHTML = mhead + mbody;
+  }
+
+  function renderLinkReport() {
+    var section = document.getElementById("link-report-section");
+    var content = document.getElementById("link-report-content");
+    var vs = getViewState();
+    var rep = vs && vs.link_report ? vs.link_report : null;
+    var merged = rep && rep.merged ? rep.merged : [];
+    var unresolved = rep && rep.unresolved ? rep.unresolved : [];
+    if (!merged.length && !unresolved.length) {
+      section.classList.add("hidden");
+      content.innerHTML = "";
+      return;
+    }
+    section.classList.remove("hidden");
+
+    var html = "<p class='muted' style='margin:0 0 10px'><b>" + merged.length +
+      "</b> rapprochement(s) effectué(s) · <b>" + unresolved.length +
+      "</b> commande(s) encore inexpliquée(s)</p>";
+
+    if (merged.length) {
+      html += '<div class="table-wrap"><table><thead><tr>' +
+        "<th>Passe</th><th>Commande</th><th>Reçue</th><th>Montant source</th>" +
+        "<th>Ticket POS</th><th>Tapé à</th><th>Montant POS</th>" +
+        "<th>Écart</th><th>Preuves</th></tr></thead><tbody>";
+      merged.forEach(function (m) {
+        var proofs = [];
+        if (m.same_payment) proofs.push("paiement " + m.payment + " ✓");
+        else proofs.push("paiement " + m.payment + " ⚠️");
+        if (m.product_sim >= 0.2) proofs.push("produits " + Math.round(m.product_sim * 100) + " %");
+        proofs.push("+" + Math.round(m.gap) + " min");
+        html += "<tr><td class='muted' style='font-size:.8rem'>" +
+          escapeHtml(m.phase || "2e passe") + "</td>" +
+          "<td><b>" + escapeHtml(m.source) + " " + escapeHtml(m.order_id) +
+          "</b></td><td>" + escapeHtml(m.when_source) + "</td><td>" +
+          m.amount_source.toFixed(2) + " DH</td><td><b>" +
+          escapeHtml(m.ticket_name || m.ticket_no) + "</b></td><td>" +
+          escapeHtml(m.when_pos) + "</td><td>" + m.amount_pos.toFixed(2) + " DH</td><td>" +
+          m.diff.toFixed(2) + " DH</td><td class='muted' style='font-size:.82rem'>" +
+          escapeHtml(proofs.join(" · ")) + "</td></tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+
+    if (unresolved.length) {
+      html += "<h4 class='link-sub'>Commandes non rapprochées — candidats évalués</h4>";
+      unresolved.forEach(function (u) {
+        html += "<div class='link-unres'><div class='link-unres-head'><b>" +
+          escapeHtml(u.source) + " " + escapeHtml(u.order_id) + "</b> · " +
+          (u.amount == null ? "?" : u.amount.toFixed(2)) + " DH · reçue " +
+          escapeHtml(u.when || "?") +
+          (u.payment ? " · " + escapeHtml(u.payment) : "") +
+          (u.expected_payment ? " → attendu au POS : <b>" +
+            escapeHtml(u.expected_payment) + "</b>" : "") + "</div>";
+        if (u.error) {
+          html += "<div class='muted'>⚠️ " + escapeHtml(u.error) + "</div>";
+        } else if (!u.candidates || !u.candidates.length) {
+          html += "<div class='muted'>Aucun ticket POS proche (montant voisin, &lt; 1 h).</div>";
+        } else {
+          html += '<div class="table-wrap"><table><thead><tr>' +
+            "<th>Ticket</th><th>Heure</th><th>Écart temps</th><th>Montant POS</th>" +
+            "<th>Écart montant</th><th>Paiement</th><th>Canal</th><th>Produits</th>" +
+            "<th>Anomalie POS</th><th>Verdict</th></tr></thead><tbody>";
+          u.candidates.slice(0, 6).forEach(function (c) {
+            html += "<tr><td><b>" + escapeHtml(c.ticket_name || c.ticket_no) +
+              "</b></td><td>" + escapeHtml(String(c.when).slice(11) || c.when) + "</td><td>" +
+              Math.round(c.gap) + " min</td><td>" + c.amount_pos.toFixed(2) + " DH</td><td>" +
+              c.diff.toFixed(2) + " DH</td><td>" + escapeHtml(c.payment) + "</td><td>" +
+              escapeHtml(c.channel || "") + "</td><td>" +
+              Math.round(c.product_sim * 100) + " %</td><td class='muted' style='font-size:.8rem'>" +
+              escapeHtml(c.anomaly_type || "—") + "</td><td>" +
+              (c.eligible ? "<b class='link-ok'>rapprochable</b>"
+                          : "<span class='muted'>" + escapeHtml(c.reason) + "</span>") +
+              "</td></tr>";
+          });
+          html += "</tbody></table></div>";
+        }
+        html += "</div>";
+      });
+    }
+    content.innerHTML = html;
   }
 
   function renderSpempReview() {

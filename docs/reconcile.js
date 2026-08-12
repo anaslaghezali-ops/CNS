@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-08-12 · 5";
+  var BUILD = "2026-08-12 · 6";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
@@ -794,7 +794,7 @@
   // Rapproche Glovo avec les tickets POS NUMÉROTÉS (canal Glovo). Les commandes
   // encore introuvables sont renvoyées (elles passeront par la passe commune des
   // tickets sans numéro avant d'être déclarées absentes). Renvoie {anomalies, missing}.
-  function reconcileGlovo(pos, glovo) {
+  function reconcileGlovo(pos, glovo, report) {
     var anomalies = [], missing = [];
     var delivered = glovo.filter(function (g) {
       return (g.status || "").toLowerCase() === "delivered";
@@ -916,6 +916,17 @@
           payment_pos: p.payment_type,
           payment_source: pr.exp,
         }));
+        if (report && report.merged) {
+          report.merged.push({
+            phase: "1re passe (nom de ticket)", source: "Glovo",
+            order_id: String(g.order_id), amount_source: g.amount,
+            when_source: hhmm(g.received_at), ticket_no: p.ticket_no,
+            ticket_name: p.ticket_name, when_pos: hhmm(p.datetime),
+            amount_pos: p.total, diff: Math.abs(p.total - g.amount),
+            payment: p.payment_type, same_payment: true, product_sim: 0,
+            gap: pr.gap,
+          });
+        }
       });
     }
     assignWrongTicketName(WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
@@ -1586,54 +1597,94 @@
   /** Signal minimal (hors montant + heure) pour fusionner deux anomalies. */
   var LINK_MIN_PRODUCT_SIM = 0.3;
 
-  function linkRelatedAnomalies(pos, glovo, site, anomalies) {
+  function linkRelatedAnomalies(pos, glovo, site, anomalies, report) {
+    report = report || { merged: [], unresolved: [] };
     var orderAnoms = anomalies.filter(function (a) {
       return LINK_ORDER_ANOM_TYPES.indexOf(a.type) >= 0;
     });
-    var posAnoms = anomalies.filter(function (a) {
-      return LINK_POS_ANOM_TYPES.indexOf(a.type) >= 0 && a.pos_ticket_no;
+    if (!orderAnoms.length) return anomalies;
+
+    // Anomalies POS « ouvertes » par ticket : un ticket déjà signalé est un candidat
+    // légitime ; un ticket sans anomalie est listé au rapport mais pas rapproché
+    // automatiquement (ce serait reclasser une vente comptoir normale).
+    var posAnomByTicket = {};
+    anomalies.forEach(function (a) {
+      if (LINK_POS_ANOM_TYPES.indexOf(a.type) < 0 || !a.pos_ticket_no) return;
+      if (!posAnomByTicket[a.pos_ticket_no]) posAnomByTicket[a.pos_ticket_no] = a;
     });
-    if (!orderAnoms.length || !posAnoms.length) return anomalies;
 
     var glovoById = {}, siteById = {};
     (glovo || []).forEach(function (g) { glovoById[String(g.order_id)] = g; });
     (site || []).forEach(function (o) { siteById[String(o.identifiant)] = o; });
 
-    var pairs = [];
+    var pairs = [], orderInfos = [];
     orderAnoms.forEach(function (oa) {
       var isGlovo = oa.source === "Glovo";
       var g = isGlovo ? glovoById[String(oa.source_ref)] : null;
       var o = isGlovo ? null : siteById[String(oa.source_ref)];
-      if (!g && !o) return;
+      var info = {
+        order_id: String(oa.source_ref), source: isGlovo ? "Glovo" : "Site",
+        candidates: [], anomaly_id: oa.id,
+      };
+      orderInfos.push(info);
+      if (!g && !o) { info.error = "commande introuvable dans le fichier source"; return; }
       var srcAmt = isGlovo ? g.amount : o.order_total;
       var srcWhen = isGlovo ? g.received_at : o.created_at;
-      if (isNaN(srcAmt) || !srcWhen) return;
+      info.amount = srcAmt;
+      info.when = srcWhen ? dtFull(srcWhen) : "";
+      info.payment = isGlovo ? g.payment_type : "";
+      if (isNaN(srcAmt) || !srcWhen) {
+        info.error = "montant ou heure de réception illisible";
+        return;
+      }
       var srcItems = isGlovo ? (g.order_items || "") : "";
       var expPay = isGlovo ? GLOVO_PAYMENT_MAP[g.payment_type]
         : (siteOrderIsTakeout(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT);
+      info.expected_payment = expPay;
 
-      posAnoms.forEach(function (pa) {
-        var p = findPosByTicketNo(pos, pa.pos_ticket_no);
-        if (!p || p.matched_glovo_order || !p.datetime || isNaN(p.total)) return;
+      pos.forEach(function (p) {
+        if (!p.datetime || isNaN(p.total)) return;
         var gap = Math.abs(minutesBetween(p.datetime, srcWhen));
         if (gap > MAX_LATE_ENTRY_MIN) return;
+        var diff = Math.abs(p.total - srcAmt);
+        var sameAmount = sameAmountRounded(p.total, srcAmt);
+        var closeAmount = diff <= Math.max(srcAmt * AMOUNT_MISMATCH_MAX_RATIO, 30);
+        // Montant éloigné : gardé au rapport seulement s'il est très proche en temps
+        // (pour montrer les montants exacts au gérant), jamais rapproché.
+        if (!closeAmount && gap > 10) return;
+
         var samePay = isGlovo
           ? p.payment_type === expPay
           : (siteOrderIsTakeout(o) ? isAllDineinPayments(p.payment_type)
                                    : p.payment_type === SITE_EXPECTED_PAYMENT);
         var sim = (srcItems && p.designations)
           ? productSimilarity(p.designations, srcItems) : 0;
-        var diff = Math.abs(p.total - srcAmt);
-        var sameAmount = sameAmountRounded(p.total, srcAmt);
-        // « Bank Transfer » sur un ticket sur place/emporter ou sans numéro ne peut
-        // venir que d'une commande Glovo/Site : le montant peut alors être approché.
+        var pa = posAnomByTicket[p.ticket_no];
+        // « Bank Transfer » hors canal Glovo/Site ne peut venir que d'une commande
+        // en ligne : signal fort même si le montant n'est pas au centime près.
         var btOnCounterTicket = p.payment_type === "Bank Transfer" &&
           p.channel !== CH_GLOVO && p.channel !== CH_SITE;
-        var amountOk = sameAmount ||
-          ((btOnCounterTicket || sim >= LINK_MIN_PRODUCT_SIM) &&
-           diff <= Math.max(srcAmt * AMOUNT_MISMATCH_MAX_RATIO, 30));
-        if (!amountOk) return;
-        if (!samePay && sim < LINK_MIN_PRODUCT_SIM) return;
+        var strongSignal = sameAmount || btOnCounterTicket || sim >= LINK_MIN_PRODUCT_SIM;
+        var amountOk = sameAmount || (closeAmount && strongSignal);
+        var reason = "";
+        if (p.matched_glovo_order) reason = "déjà rattaché à la commande " + p.matched_glovo_order;
+        else if (!pa) reason = "ticket sans anomalie (vente comptoir normale ?)";
+        else if (!closeAmount) reason = "montant trop différent (" + diff.toFixed(2) + " DH)";
+        else if (!amountOk) {
+          reason = "montant différent (" + diff.toFixed(2) +
+                   " DH) sans autre indice (paiement / produits)";
+        } else if (!samePay && sim < LINK_MIN_PRODUCT_SIM && !sameAmount) {
+          reason = "mode de paiement '" + p.payment_type + "' ≠ '" + expPay +
+                   "' et produits < " + Math.round(LINK_MIN_PRODUCT_SIM * 100) + " %";
+        }
+        info.candidates.push({
+          ticket_no: p.ticket_no, ticket_name: p.ticket_name,
+          when: dtFull(p.datetime), amount_pos: p.total, diff: diff,
+          payment: p.payment_type, channel: p.channel, gap: gap,
+          product_sim: sim, has_anomaly: !!pa,
+          anomaly_type: pa ? pa.type : "", eligible: !reason, reason: reason,
+        });
+        if (reason) return;
         pairs.push({
           oa: oa, pa: pa, p: p, g: g, o: o, isGlovo: isGlovo, gap: gap,
           samePay: samePay, sim: sim, expPay: expPay, srcAmt: srcAmt,
@@ -1641,8 +1692,13 @@
           cost: gap - (samePay ? 30 : 0) - sim * 20 + diff * 5,
         });
       });
+      info.candidates.sort(function (a, b) { return a.gap - b.gap; });
     });
-    if (!pairs.length) return anomalies;
+
+    if (!pairs.length) {
+      report.unresolved = orderInfos;
+      return anomalies;
+    }
 
     pairs.sort(function (a, b) { return a.cost - b.cost; });
     var usedOrder = {}, usedTicket = {}, removeIds = {}, added = [];
@@ -1689,8 +1745,18 @@
         payment_pos: p.payment_type,
         payment_source: pr.expPay,
       }));
+
+      report.merged.push({
+        phase: "2e passe (recoupement)",
+        source: src, order_id: String(srcId), amount_source: pr.srcAmt,
+        when_source: hhmm(pr.srcWhen), ticket_no: p.ticket_no,
+        ticket_name: p.ticket_name, when_pos: hhmm(p.datetime),
+        amount_pos: p.total, diff: pr.diff, payment: p.payment_type,
+        same_payment: pr.samePay, product_sim: pr.sim, gap: pr.gap,
+      });
     });
 
+    report.unresolved = orderInfos.filter(function (i) { return !usedOrder[i.order_id]; });
     return anomalies.filter(function (a) { return !removeIds[a.id]; }).concat(added);
   }
 
@@ -2095,13 +2161,14 @@
     // 2) Passe COMMUNE : tickets sans numéro attribués jointement (Glovo+Site).
     var anomalies = [];
     var missingSite = [], missingGlovo = [];
+    var linkReport = { merged: [], unresolved: [] };
     if (site) {
       var rs = reconcileSite(pos, site);
       anomalies = anomalies.concat(rs.anomalies); missingSite = rs.missing;
     }
     if (naps) anomalies = anomalies.concat(reconcileNaps(pos, naps));
     if (glovo) {
-      var rg = reconcileGlovo(pos, glovo);
+      var rg = reconcileGlovo(pos, glovo, linkReport);
       anomalies = anomalies.concat(rg.anomalies); missingGlovo = rg.missing;
       if (naps) anomalies = resolveGlovoOrphansAsSpemp(pos, naps, anomalies);
     }
@@ -2110,7 +2177,7 @@
     anomalies = anomalies.concat(reconcileDinein(pos));
     // Passe finale : recouper les anomalies restantes entre elles (mauvais nom de
     // ticket) AVANT les contrôles de nombre, pour que les compteurs soient justes.
-    anomalies = linkRelatedAnomalies(pos, glovo, site, anomalies);
+    anomalies = linkRelatedAnomalies(pos, glovo, site, anomalies, linkReport);
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
     anomalies = detectDuplicates(pos, anomalies, glovo);  // doublons/corrections
     appendFinancialGapAnomalies(pos, glovo, site, anomalies);
@@ -2136,6 +2203,7 @@
       summary: summary,
       naps_balanced: naps_balanced,
       spemp_review: buildSpempReviewList(pos),
+      link_report: linkReport,
     };
   }
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ChickNSter — Réconciliation</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐔</text></svg>" />
-  <link rel="stylesheet" href="style.css?v=20260812-5" />
+  <link rel="stylesheet" href="style.css?v=20260812-6" />
 </head>
 <body>
   <header class="hero">
@@ -90,6 +90,16 @@
       <p class="muted" style="margin-top:18px">Répartition des montants POS par <b>mode de paiement × canal</b> (d'où vient l'argent) :</p>
       <div class="table-wrap"><table id="fin-matrix"></table></div>
 
+      <section id="link-report-section" class="hidden link-report-block">
+        <h3>🔗 2ᵉ passe — rapprochement des anomalies entre elles</h3>
+        <p class="muted">
+          Après la première réconciliation, chaque commande <b>absente du POS</b> est recroisée avec les
+          tickets POS <b>proches</b> (même montant à 1 DH près ou montant voisin, moins d'une heure d'écart,
+          mode de paiement attendu ou produits compatibles). Un rapprochement fusionne les 2 anomalies.
+        </p>
+        <div id="link-report-content"></div>
+      </section>
+
       <section id="spemp-review-section" class="hidden spemp-review-block">
         <h3>🍽 SP&EMP — tickets hors Glovo / Site</h3>
         <p class="muted">
@@ -152,7 +162,7 @@
   </footer>
 
   <script src="vendor/xlsx.full.min.js"></script>
-  <script src="reconcile.js?v=20260812-5"></script>
-  <script src="app.js?v=20260812-5"></script>
+  <script src="reconcile.js?v=20260812-6"></script>
+  <script src="app.js?v=20260812-6"></script>
 </body>
 </html>
