@@ -848,7 +848,8 @@
     var t = String(text).toLowerCase()
       .replace(/\d+/g, " ")
       .replace(/[×x]/gi, " ")
-      .replace(/\[[^\]]*\]/g, " ")
+      .replace(/\[/g, " ")
+      .replace(/\]/g, " ")
       .replace(/[^a-zàâäéèêëïîôùûüç0-9\s]/gi, " ");
     var out = [];
     t.split(/[\s,]+/).forEach(function (w) {
@@ -973,6 +974,29 @@
     var orderIds = Object.keys(glovoByOrder);
     if (orderIds.length > 1) return false;
 
+    // Une seule commande Glovo retrouvée sur le cluster → correction si les autres
+    // lignes sont des saisies erronées (mauvais paiement / montant), pas une 2ᵉ vente.
+    if (orderIds.length === 1) {
+      var g = glovoByOrder[orderIds[0]];
+      var expectedPay = GLOVO_PAYMENT_MAP[g.payment_type];
+      for (var j = 0; j < cl.length; j++) {
+        var pj = cl[j];
+        if (glovoMatchForPosLine(pj, glovo, true)) continue;
+        // Cash 0 DH = vente enveloppe distincte (ex. ticket 15), pas une correction.
+        if (pj.payment_type === "Cash" &&
+            (isNaN(pj.total) || pj.total <= AMOUNT_TOL)) return false;
+        // Mauvais mode de paiement vs la commande Glovo → saisie erronée (ex. 98 BT).
+        if (pj.payment_type !== expectedPay) continue;
+        if (!isNaN(pj.total) && pj.total > AMOUNT_TOL &&
+            Math.abs(pj.total - g.amount) > AMOUNT_TOL) {
+          if (pj.designations && g.order_items &&
+              productSimilarity(pj.designations, g.order_items) < 0.25) return false;
+        }
+      }
+      return true;
+    }
+
+    // Aucune commande Glovo : correction seulement si montants identiques ou produits quasi identiques.
     var nonZero = cl.filter(function (p) { return !isNaN(p.total) && p.total > AMOUNT_TOL; });
     if (nonZero.length >= 2) {
       var t0 = nonZero[0].total;
@@ -981,27 +1005,24 @@
       }
     }
 
-    if (orderIds.length === 1) {
-      var g = glovoByOrder[orderIds[0]];
-      for (var j = 0; j < cl.length; j++) {
-        var pj = cl[j];
-        if (glovoMatchForPosLine(pj, glovo, true)) continue;
-        if (pj.designations && g.order_items &&
-            productSimilarity(pj.designations, g.order_items) < 0.3) return false;
-        if (!isNaN(pj.total) && pj.total > AMOUNT_TOL &&
-            Math.abs(pj.total - g.amount) > AMOUNT_TOL) return false;
-      }
-    } else {
-      var base = cl[0];
-      for (var k = 1; k < cl.length; k++) {
-        if (base.designations && cl[k].designations &&
-            productSimilarity(base.designations, cl[k].designations) < 0.35) return false;
-        if (!isNaN(base.total) && !isNaN(cl[k].total) &&
-            base.total > AMOUNT_TOL && cl[k].total > AMOUNT_TOL &&
-            Math.abs(base.total - cl[k].total) > AMOUNT_TOL) return false;
-      }
+    var base = cl[0];
+    for (var k = 1; k < cl.length; k++) {
+      if (base.designations && cl[k].designations &&
+          productSimilarity(base.designations, cl[k].designations) < 0.35) return false;
+      if (!isNaN(base.total) && !isNaN(cl[k].total) &&
+          base.total > AMOUNT_TOL && cl[k].total > AMOUNT_TOL &&
+          Math.abs(base.total - cl[k].total) > AMOUNT_TOL) return false;
     }
     return true;
+  }
+
+  function glovoLineMatchTag(p, glovo) {
+    var m = glovoMatchForPosLine(p, glovo, true);
+    if (m) {
+      return " ✓ commande Glovo " + m.order_id + " (" + m.amount.toFixed(0) +
+             " DH " + m.payment_type + ")";
+    }
+    return " ✗ aucune commande Glovo correspondante";
   }
 
   function summarizeExtraByPayment(lines) {
@@ -1118,7 +1139,7 @@
         var versions = cl.map(function (p, idx) {
           return "v" + (idx + 1) + " " + hhmm(p.datetime) + " " +
                  (isNaN(p.total) ? "?" : p.total.toFixed(0)) + " DH " + p.payment_type +
-                 " (ligne " + p.row + ")";
+                 " (ligne " + p.row + ")" + glovoLineMatchTag(p, glovo);
         }).join(" → ");
         var diffs = [];
         if (!isNaN(first.total) && !isNaN(last.total) && Math.abs(first.total - last.total) > AMOUNT_TOL)
@@ -1131,12 +1152,19 @@
         var extraBreakdown = extraPaymentNote(dupVers);
         var retainNote = "";
         if (glovoRef) {
-          retainNote = " Commande Glovo " + glovoRef.order_id + " (" + glovoRef.payment_type +
-            ") → paiement POS à retenir : " + retainPay + ". Retenir v" + (retainIdx + 1) +
-            " (ligne " + retainVer.row + ", " + retainVer.payment_type + "). À annuler au POS : " +
+          var retainMatch = glovoMatchForPosLine(retainVer, glovo, true);
+          retainNote = " Commande Glovo " + glovoRef.order_id + " (" +
+            (retainMatch
+              ? retainMatch.amount.toFixed(0) + " DH " + retainMatch.payment_type
+              : glovoRef.payment_type) +
+            ") → bonne saisie : v" + (retainIdx + 1) + " ligne " + retainVer.row +
+            " (" + retainVer.total.toFixed(0) + " DH " + retainVer.payment_type + ")." +
+            " À annuler au POS : " +
             dupVers.map(function (p) {
-              return "v" + (cl.indexOf(p) + 1) + " ligne " + p.row + " (" + p.payment_type + ")";
-            }).join(", ") + ".";
+              return "v" + (cl.indexOf(p) + 1) + " ligne " + p.row + " (" +
+                     (isNaN(p.total) ? "?" : p.total.toFixed(0)) + " DH " + p.payment_type +
+                     ")" + glovoLineMatchTag(p, glovo);
+            }).join(" · ") + ".";
         } else if (first.payment_type !== last.payment_type) {
           retainNote = " Sans commande Glovo retrouvée : retenir en principe la dernière saisie v" +
             cl.length + " (" + last.payment_type + ") si c'est la correction — vérifier manuellement.";
@@ -1250,9 +1278,7 @@
         return a.pos_ticket_no === p.ticket_no && a.type === "Ticket en double (correction)";
       })) return;
       if (anomalies.some(function (a) {
-        return a.type === "Ticket en double (correction)" && a.source === "Glovo" &&
-               a.payment_pos === p.payment_type &&
-               (a.source_ref === p.ticket_name || a.ticket_name === p.ticket_name);
+        return a.type === "Ticket en double (correction)" && a.ticket_name === p.ticket_name;
       })) return;
       if (hasGlovoFinAnomaly(null, p.ticket_no, p.payment_type)) return;
       var bucket = p.payment_type === "Cash" ? "Cash" : "Online";
