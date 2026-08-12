@@ -257,6 +257,16 @@
     var m = s(o.delivery_method).toLowerCase().replace(/à/g, "a").replace(/é/g, "e");
     return m.indexOf("emporter") >= 0;
   }
+  function siteOrderIsClosed(o) {
+    var ls = s(o.last_status).toLowerCase().replace(/é/g, "e");
+    return ls === "fermee" || ls === "closed";
+  }
+  // Livraison → DELIVERED (col L). Emporter → Fermée (pas de statut livreur DELIVERED).
+  function siteOrderCountsInReconciliation(o) {
+    if ((o.delivery_status || "").toUpperCase() === "DELIVERED") return true;
+    if (siteOrderIsTakeout(o) && siteOrderIsClosed(o)) return true;
+    return false;
+  }
   function sitePaymentWarning(p, o) {
     if (siteOrderIsTakeout(o)) {
       if (p.payment_type === "Bank Transfer") {
@@ -350,10 +360,10 @@
     var unmatchedDelivered = [];
     site.forEach(function (o) {
       var sid = o.identifiant;
-      var delivered = (o.delivery_status || "").toUpperCase() === "DELIVERED";
+      var counts = siteOrderCountsInReconciliation(o);
       var p = byName[sid];
       if (p) pushSitePaymentAnomalies(p, o, anomalies);
-      if (delivered) {
+      if (counts) {
         if (!p) { unmatchedDelivered.push(o); return; }
         if (!isNaN(p.total) && Math.abs(p.total - o.order_total) > AMOUNT_TOL) {
           anomalies.push(posAnomaly(p, { source: "Site", severity: "haute",
@@ -1208,7 +1218,8 @@
         if (p.channel !== CH_SITE) return;
         var o = siteById[p.ticket_name];
         if (!o) return;
-        if ((o.delivery_status || "").toUpperCase() === "DELIVERED") return;
+        if (siteOrderIsTakeout(o)) return;
+        if (siteOrderCountsInReconciliation(o)) return;
         if (anomalies.some(function (a) {
           return a.pos_ticket_no === p.ticket_no && a.source === "Site";
         })) return;
@@ -1410,7 +1421,7 @@
     });
 
     var posSite = sumPos(CH_SITE), siteL = 0;
-    if (site) site.filter(function (o) { return (o.delivery_status || "").toUpperCase() === "DELIVERED"; })
+    if (site) site.filter(siteOrderCountsInReconciliation)
       .forEach(function (o) { if (!isNaN(o.order_total)) siteL += o.order_total; });
 
     var lines = [];
@@ -1445,7 +1456,8 @@
     }
     if (site) lines.push({
       lineKey: "site", source: "🌐 Site", pos_label: "POS tickets Site",
-      pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite,
+      pos: posSite, src_label: "Site (livrées col L + emporter Fermée)", src: siteL,
+      ecart: siteL - posSite,
     });
 
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines };

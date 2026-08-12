@@ -130,6 +130,19 @@ def _push_site_payment_anomalies(pos_row, site_row, anomalies):
         ))
 
 
+def _site_order_is_closed(site_row) -> bool:
+    ls = str(site_row.get("last_status", "")).lower().replace("é", "e")
+    return ls in ("fermee", "closed")
+
+
+def _site_order_counts_in_reconciliation(site_row) -> bool:
+    if str(site_row.get("delivery_status", "")).upper() == "DELIVERED":
+        return True
+    if _site_order_is_takeout(site_row) and _site_order_is_closed(site_row):
+        return True
+    return False
+
+
 def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
     """
     Rapproche le site par NUMÉRO (exact) et par faute de frappe (orphelin
@@ -146,11 +159,11 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
     unmatched_delivered = []
     for _, s in site_df.iterrows():
         sid = str(s["identifiant"])
-        delivered = str(s.get("delivery_status", "")).upper() == "DELIVERED"
+        counts = _site_order_counts_in_reconciliation(s)
         pos_row = pos_by_name.get(sid)
         if pos_row is not None:
             _push_site_payment_anomalies(pos_row, s, anomalies)
-        if delivered:
+        if counts:
             if pos_row is None:
                 unmatched_delivered.append(s)
                 continue
