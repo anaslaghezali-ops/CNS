@@ -3,7 +3,7 @@
   "use strict";
 
   var files = { pos: null, glovo: null, naps: null, site: null };
-  var state = null; // { anomalies, pos, summary, validated: { id: true } }
+  var state = null; // { anomalies, pos, summary, validated, cashUserAssignments }
 
   var SEV_BADGE = { haute: "🔴 Haute", moyenne: "🟠 Moyenne", info: "🔵 Info" };
   var SEV_ORDER = { haute: 0, moyenne: 1, info: 2 };
@@ -73,6 +73,7 @@
         state = CNS.run(pos, glovo, naps, site);
         state.byDay = CNS.runDailyBreakdown(pos, glovo, naps, site);
         state.validated = {};
+        state.cashUserAssignments = {};
         activeDayKey = null;
         finDetailLineKey = null;
         render();
@@ -224,7 +225,30 @@
     CNS.enrichCashToCollectByUser(
       fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.naps,
       viewState.site, CNS.listPosDates(viewState.pos));
+    CNS.applyCashUserAssignments(fin.cash_to_collect, state.cashUserAssignments || {});
     return fin;
+  }
+
+  function assignCashContribution(contribId, userName) {
+    if (!state || !contribId || !userName) return;
+    state.cashUserAssignments[contribId] = userName;
+    render();
+  }
+
+  function unassignCashContribution(contribId) {
+    if (!state || !state.cashUserAssignments || !state.cashUserAssignments[contribId]) return;
+    delete state.cashUserAssignments[contribId];
+    render();
+  }
+
+  function listViewPosUsers() {
+    var vs = getViewState();
+    if (!vs || !vs.pos) return [];
+    return CNS.listPosUsers(vs.pos);
+  }
+
+  function isUnattributedCashContrib(t) {
+    return (t.original_user || t.user) === CNS.CASH_COLLECT_UNATTRIBUTED;
   }
 
   function renderDayTabs() {
@@ -424,6 +448,66 @@
       }).join("") + "</div>";
     }
 
+    var unattributed = (cc.ticket_contributions || []).filter(function (t) {
+      return Math.abs(t.amount) >= 0.5 && isUnattributedCashContrib(t);
+    });
+  var posUsers = listViewPosUsers();
+    if (unattributed.length) {
+      var pending = unattributed.filter(function (t) { return !t.manually_assigned; });
+      var manual = unattributed.filter(function (t) { return t.manually_assigned; });
+
+      if (pending.length) {
+        html += "<h3 class='cc-user-title'>À clarifier — Non attribué</h3>";
+        html += "<p class='muted' style='margin:0 0 8px'>Affectez à un utilisateur POS " +
+          "une fois la preuve trouvée (colonne F).</p>";
+        html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
+          "<th>Date/heure</th><th>Source</th><th>Montant</th><th>Détail</th>" +
+          "<th>Affecter à</th></tr></thead><tbody>";
+        pending.forEach(function (t) {
+          var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
+            (t.lineKey === "site_cash" ? "Site emporter" :
+              (t.lineKey === "naps_tpe_over" ? "TPE CB" : t.lineKey));
+          var opts = posUsers.map(function (u) {
+            return "<option value='" + escapeAttr(u) + "'>" + escapeHtml(u) + "</option>";
+          }).join("");
+          html += "<tr><td>" + escapeHtml(t.when || "") + "</td>" +
+            "<td>" + escapeHtml(lineLbl) + "</td>" +
+            "<td class='cc-ecart-pos'><b>" + fmtDH(t.amount) + "</b></td>" +
+            "<td class='muted' style='font-size:.82rem'>" + escapeHtml(t.detail || "") + "</td>" +
+            "<td class='cc-assign-cell'>" +
+            (posUsers.length ?
+              "<select class='cc-user-select' data-cid='" + escapeAttr(t.id) + "'>" +
+              opts + "</select>" +
+              "<button type='button' class='btn-assign-cash' data-cid='" +
+              escapeAttr(t.id) + "'>Affecter</button>" :
+              "<span class='muted'>Aucun User dans le POS</span>") +
+            "</td></tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+
+      if (manual.length) {
+        html += "<h3 class='cc-user-title'>Réaffectations manuelles</h3>";
+        html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
+          "<th>Utilisateur</th><th>Date/heure</th><th>Source</th><th>Montant</th>" +
+          "<th>Détail</th><th></th></tr></thead><tbody>";
+        manual.forEach(function (t) {
+          var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
+            (t.lineKey === "site_cash" ? "Site emporter" :
+              (t.lineKey === "naps_tpe_over" ? "TPE CB" : t.lineKey));
+          html += "<tr class='row-manual-cash'><td><b>" + escapeHtml(t.user) + "</b> " +
+            "<span class='cc-manual-badge'>Manuel</span></td>" +
+            "<td>" + escapeHtml(t.when || "") + "</td>" +
+            "<td>" + escapeHtml(lineLbl) + "</td>" +
+            "<td class='cc-ecart-pos'><b>" + fmtDH(t.amount) + "</b></td>" +
+            "<td class='muted' style='font-size:.82rem'>" + escapeHtml(t.detail || "") + "</td>" +
+            "<td><button type='button' class='btn-unassign-cash' data-cid='" +
+            escapeAttr(t.id) + "'>Annuler</button></td></tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+    }
+
     if (cc.by_user && cc.by_user.length) {
       var withNet = cc.by_user.filter(function (u) {
         return Math.abs(u.net_to_collect) >= 0.5 || u.to_collect >= 0.5 || u.over_recorded >= 0.5;
@@ -465,7 +549,9 @@
           var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
             (t.lineKey === "site_cash" ? "Site emporter" :
               (t.lineKey === "naps_tpe_over" ? "TPE CB" : t.lineKey));
-          html += "<tr><td>" + escapeHtml(t.user || "Non attribué") + "</td>" +
+          html += "<tr><td>" + escapeHtml(t.user || "Non attribué") +
+            (t.manually_assigned ? " <span class='cc-manual-badge'>Manuel</span>" : "") +
+            "</td>" +
             "<td>" + escapeHtml(t.when || "") + "</td>" +
             "<td>" + escapeHtml(t.ticket_name || t.ticket_no || "—") + "</td>" +
             "<td>" + escapeHtml(lineLbl) + "</td>" +
@@ -478,6 +564,20 @@
     }
 
     content.innerHTML = html;
+
+    content.querySelectorAll(".btn-assign-cash").forEach(function (btn) {
+      btn.onclick = function () {
+        var row = btn.closest("tr");
+        var sel = row ? row.querySelector("select.cc-user-select") : null;
+        if (!sel || !sel.value) return;
+        assignCashContribution(btn.getAttribute("data-cid"), sel.value);
+      };
+    });
+    content.querySelectorAll(".btn-unassign-cash").forEach(function (btn) {
+      btn.onclick = function () {
+        unassignCashContribution(btn.getAttribute("data-cid"));
+      };
+    });
   }
 
   function renderFinancial(fin) {
@@ -1005,13 +1105,17 @@
       }
       var rows = [
         ["Cash à collecter — détail tickets"],
-        ["Utilisateur", "Date/heure", "N° POS", "Ticket name", "Source", "Montant (DH)", "Détail"],
+        ["Utilisateur", "Date/heure", "N° POS", "Ticket name", "Source",
+          "Montant (DH)", "Affectation", "Détail"],
       ];
       runFin.cash_to_collect.ticket_contributions.forEach(function (t) {
         if (Math.abs(t.amount) < 0.5) return;
         var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
           (t.lineKey === "site_cash" ? "Site emporter" :
             (t.lineKey === "naps_tpe_over" ? "TPE CB > NAPS" : t.lineKey));
+        var aff = t.manually_assigned ? "Manuel → " + t.user :
+          ((t.original_user || t.user) === CNS.CASH_COLLECT_UNATTRIBUTED ?
+            "Non attribué" : "Auto (ticket POS)");
         rows.push([
           t.user || "Non attribué",
           t.when || "",
@@ -1019,6 +1123,7 @@
           t.ticket_name || "",
           lineLbl,
           Math.round(t.amount),
+          aff,
           t.detail || "",
         ]);
       });
@@ -1155,6 +1260,10 @@
       .map(function (c) { return c.value; });
   }
   function uniq(arr) { return arr.filter(function (v, i) { return arr.indexOf(v) === i; }); }
+  function escapeAttr(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;").replace(/</g, "&lt;");
+  }
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];

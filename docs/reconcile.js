@@ -2291,15 +2291,67 @@
     }).sort(function (a, b) { return b.net_to_collect - a.net_to_collect; });
   }
 
+  function cashContributionId(c) {
+    return [
+      c.lineKey || "",
+      c.source_ref || "",
+      c.when || "",
+      String(c.ticket_no || ""),
+      (isNaN(c.amount) ? 0 : c.amount).toFixed(2),
+    ].join("|");
+  }
+
+  function stampCashContributions(contribs) {
+    contribs.forEach(function (c) {
+      c.id = cashContributionId(c);
+      c.original_user = c.user || CASH_COLLECT_UNATTRIBUTED;
+    });
+    return contribs;
+  }
+
   /** Ventile le cash à collecter par utilisateur POS (colonne F « User »). */
   function enrichCashToCollectByUser(cc, pos, glovo, site, naps, posDates) {
     if (!cc) return cc;
     var contribs = collectGlovoCashContributions(pos, glovo);
     contribs = contribs.concat(collectSiteEmporterContributions(pos, site));
     contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
+    stampCashContributions(contribs);
     cc.ticket_contributions = contribs;
     cc.by_user = aggregateCashCollectByUser(contribs);
     return cc;
+  }
+
+  /**
+   * Réaffectations manuelles (lignes « Non attribué » → user choisi par le gérant).
+   * assignments : { [contributionId]: userName }
+   */
+  function applyCashUserAssignments(cc, assignments) {
+    if (!cc || !cc.ticket_contributions) return cc;
+    if (!assignments) return cc;
+    cc.ticket_contributions.forEach(function (c) {
+      var manual = assignments[c.id];
+      if (manual) {
+        c.user = manual;
+        c.manually_assigned = true;
+        c.assigned_user = manual;
+      } else {
+        c.user = c.original_user || CASH_COLLECT_UNATTRIBUTED;
+        c.manually_assigned = false;
+        delete c.assigned_user;
+      }
+    });
+    cc.by_user = aggregateCashCollectByUser(cc.ticket_contributions);
+    return cc;
+  }
+
+  function listPosUsers(pos) {
+    var set = {};
+    if (!pos) return [];
+    pos.forEach(function (p) {
+      var u = s(p.user);
+      if (u) set[u] = true;
+    });
+    return Object.keys(set).sort();
   }
 
   /** Totaux POS par mode de paiement avec split canal (Glovo / SP&EMP / Site). */
@@ -2544,6 +2596,9 @@
     sumFinancialAdjustments: sumFinancialAdjustments,
     applyFinancialAdjustments: applyFinancialAdjustments,
     enrichCashToCollectByUser: enrichCashToCollectByUser,
+    applyCashUserAssignments: applyCashUserAssignments,
+    listPosUsers: listPosUsers,
+    CASH_COLLECT_UNATTRIBUTED: CASH_COLLECT_UNATTRIBUTED,
     getFinancialContributors: getFinancialContributors,
     ecartContributionForAnomaly: ecartContributionForAnomaly,
     sumFinancialContributions: sumFinancialContributions,

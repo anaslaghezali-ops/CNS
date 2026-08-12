@@ -625,6 +625,18 @@ ticket CB non rattaché avec ligne NAPS correspondante = sur place/emporter.
 
 ---
 
+### 2026-08-12 — Affectation manuelle cash « Non attribué » → User
+
+**Demandé par** : gérant — une fois la preuve trouvée, affecter une ligne Non attribué
+à un utilisateur POS ; le montant se reporte dans le tableau par user.
+
+**UI** : section « À clarifier », liste déroulante des Users POS, badge Manuel + Annuler.
+**Excel** : colonne Affectation sur « Cash tickets détail ».
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
