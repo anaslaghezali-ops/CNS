@@ -160,6 +160,28 @@ le composaient (ex. −495 DH Online, −107 DH Cash).
 
 ---
 
+### 2026-08-12 — Glovo : commandes annulées rapprochées au POS
+
+**Demandé par** : gérant (ex. ticket POS `369` Cash 95 DH — commande Glovo annulée
+`101736516017` non reconnue → fausse orpheline).
+
+**Problème** : seules les commandes **Delivered** participaient au rapprochement.
+Si le caissier tape la commande puis Glovo l'annule, le ticket POS restait « sans
+commande correspondante ».
+
+**Règle appliquée** :
+
+- Après le rapprochement des **livrées**, les commandes **Cancelled** sont aussi
+  comparées aux tickets Glovo POS encore libres (même fenêtre temps + montant + paiement).
+- Match → **info** « Commande Glovo annulée — présente au POS » (pas une anomalie).
+- Annulée **sans** ticket POS → pas d'alerte (normal).
+- **Réconciliation financière** : annulées **tapées au POS** (`matched_pos`) comptées
+  côté source Glovo (W − AE), en plus des livrées.
+
+**Fichiers modifiés** : `reconciliation/reconcile.py`, `docs/reconcile.js`.
+
+---
+
 ### Antérieur (branche `claude/chicknster-reconciliation-system-460chx`)
 
 Modifications déjà présentes **avant** la session Cursor du 12 août — ne pas

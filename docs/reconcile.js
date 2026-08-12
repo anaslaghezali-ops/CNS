@@ -476,10 +476,10 @@
     // d'abord — une commande ne peut plus « voler » le ticket d'une autre plus
     // proche. Le montant sert seulement de léger départage (il n'est pas fiable :
     // le POS colle tantôt au montant brut W, tantôt au net AP).
-    function assignGlobal(payFilter, beforeMin, afterMin) {
+    function assignGlobalList(list, matchSet, payFilter, beforeMin, afterMin) {
       var pairs = [];
-      delivered.forEach(function (g, gi) {
-        if (matched.has(gi) || !g.received_at) return;
+      list.forEach(function (g, gi) {
+        if (matchSet.has(gi) || !g.received_at) return;
         var exp = GLOVO_PAYMENT_MAP[g.payment_type];
         pool.forEach(function (p, pi) {
           if (used.has(pi) || !payFilter(p.payment_type, exp)) return;
@@ -491,19 +491,19 @@
       pairs.sort(function (a, b) { return a.cost - b.cost; });
       var res = [];
       pairs.forEach(function (pr) {
-        if (matched.has(pr.gi) || used.has(pr.pi)) return;
-        matched.add(pr.gi); used.add(pr.pi); res.push(pr);
+        if (matchSet.has(pr.gi) || used.has(pr.pi)) return;
+        matchSet.add(pr.gi); used.add(pr.pi); res.push(pr);
       });
       return res;
     }
     var isExp = function (pt, exp) { return pt === exp; };
     var isWrong = function (pt, exp) { return pt !== exp; };
 
-    // Phase 1 : fenêtre proche, BON mode de paiement.
-    assignGlobal(isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
+    // Phase 1 : fenêtre proche, BON mode de paiement (livrées).
+    assignGlobalList(delivered, matched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
 
     // Phase 2 : fenêtre proche, MAUVAIS mode de paiement -> erreur de paiement.
-    assignGlobal(isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN).forEach(function (pr) {
+    assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi], exp = GLOVO_PAYMENT_MAP[g.payment_type];
       anomalies.push(anomaly({ source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
@@ -517,7 +517,7 @@
     });
 
     // Phase 3 : saisie tardive (fenêtre élargie ±120 min, bon mode de paiement).
-    assignGlobal(isExp, 120, 120).forEach(function (pr) {
+    assignGlobalList(delivered, matched, isExp, 120, 120).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi];
       var delay = minutesBetween(p.datetime, g.received_at);
       anomalies.push(anomaly({ source: "Glovo", severity: "info",
@@ -531,7 +531,34 @@
         file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
 
-    // Commandes non appariées -> passe commune (ticket sans numéro) puis « absente ».
+    // Phase 4 : commandes ANNULÉES tapées au POS (avant annulation) — pas des orphelins.
+    var cancelled = glovo.filter(function (g) {
+      return (g.status || "").toLowerCase() === "cancelled";
+    }).slice().sort(function (a, b) {
+      return (a.received_at ? a.received_at.getTime() : 0) -
+             (b.received_at ? b.received_at.getTime() : 0);
+    });
+    var cancelledMatched = new Set();
+    assignGlobalList(cancelled, cancelledMatched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
+    assignGlobalList(cancelled, cancelledMatched, isExp, 120, 120).forEach(function (pr) {
+      var g = cancelled[pr.gi], p = pool[pr.pi];
+      g.matched_pos = true;
+      var delay = minutesBetween(p.datetime, g.received_at);
+      anomalies.push(anomaly({ source: "Glovo", severity: "info",
+        type: "Commande Glovo annulée — présente au POS",
+        detail: "Commande Glovo " + g.order_id + " annulée (" + g.payment_type + ", " +
+                g.amount.toFixed(0) + " DH) reçue à " + hhmm(g.received_at) +
+                ", tapée au POS (ticket " + (p.ticket_name || p.ticket_no) + " à " +
+                hhmm(p.datetime) + ", " + (delay >= 0 ? "+" : "") + delay.toFixed(0) +
+                " min) — commande annulée sur Glovo mais ticket caisse présent.",
+        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
+        amount_pos: p.total, amount_source: g.amount,
+        payment_pos: p.payment_type,
+        payment_source: GLOVO_PAYMENT_MAP[g.payment_type],
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+    });
+
+    // Commandes livrées non appariées -> passe commune puis « absente ».
     delivered.forEach(function (g, gi) {
       if (matched.has(gi)) return;
       if (!g.received_at) {
@@ -862,12 +889,16 @@
         return a + (p.channel === CH_GLOVO && p.payment_type === pay && !isNaN(p.total) ? p.total : 0);
       }, 0);
     }
-    function sumGlovoDelivered(pay) {
+    function sumGlovoAmount(pay) {
       if (!glovo) return 0;
       return glovo.reduce(function (a, g) {
-        if ((g.status || "").toLowerCase() !== "delivered") return a;
         if (g.payment_type !== pay) return a;
-        return a + (isNaN(g.amount) ? 0 : g.amount);
+        var st = (g.status || "").toLowerCase();
+        var amt = isNaN(g.amount) ? 0 : g.amount;
+        if (st === "delivered") return a + amt;
+        // Annulée mais tapée au POS : compter côté source pour la réconciliation financière.
+        if (st === "cancelled" && g.matched_pos) return a + amt;
+        return a;
       }, 0);
     }
 
@@ -877,8 +908,11 @@
       if (posDates.has(n.date) && !isNaN(n.montant)) napsTotal += n.montant; });
 
     var posGlovo = sumPos(CH_GLOVO), glovoW = 0;
-    if (glovo) glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; })
-      .forEach(function (g) { if (!isNaN(g.amount)) glovoW += g.amount; });
+    if (glovo) glovo.forEach(function (g) {
+      var st = (g.status || "").toLowerCase();
+      if (isNaN(g.amount)) return;
+      if (st === "delivered" || (st === "cancelled" && g.matched_pos)) glovoW += g.amount;
+    });
 
     var posSite = sumPos(CH_SITE), siteL = 0;
     if (site) site.filter(function (o) { return (o.delivery_status || "").toUpperCase() === "DELIVERED"; })
@@ -892,8 +926,8 @@
     if (glovo) {
       var posGlovoBT = sumPosGlovoPay("Bank Transfer");
       var posGlovoCash = sumPosGlovoPay("Cash");
-      var glovoOnline = sumGlovoDelivered("Online");
-      var glovoCash = sumGlovoDelivered("Cash");
+      var glovoOnline = sumGlovoAmount("Online");
+      var glovoCash = sumGlovoAmount("Cash");
       lines.push({
         lineKey: "glovo_online", source: "🛵 Glovo — Online",
         pos_label: "POS Glovo « Bank Transfer »",

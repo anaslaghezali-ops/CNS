@@ -347,6 +347,41 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
         else:
             missing.append(g)  # -> passe commune (ticket sans numéro) puis « absente »
 
+    # Commandes ANNULÉES : si tapées au POS avant annulation, rapprocher (pas une orpheline).
+    cancelled = glovo_df[glovo_df["status"].str.lower() == "cancelled"].copy()
+    cancelled = cancelled.sort_values("received_at")
+    for gidx, g in cancelled.iterrows():
+        if pd.isna(g["received_at"]):
+            continue
+        lo, hi = g["received_at"] - before, g["received_at"] + after
+        best = _glovo_nearest(
+            g, pool, used, lo, hi,
+            payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), require_amount=True,
+        )
+        if best is None:
+            lo, hi = g["received_at"] - wide, g["received_at"] + wide
+            best = _glovo_nearest(
+                g, pool, used, lo, hi,
+                payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), require_amount=True,
+            )
+        if best is not None:
+            used.add(best)
+            p = pos_df.loc[best]
+            glovo_df.loc[gidx, "matched_pos"] = True
+            delay = (p["datetime"] - g["received_at"]).total_seconds() / 60
+            anomalies.append(_anomaly(
+                "Glovo", "info", "Commande Glovo annulée — présente au POS",
+                f"Commande Glovo {g['order_id']} annulée ({g['payment_type']}, "
+                f"{g['amount']:.0f} DH) reçue à {g['received_at']:%H:%M}, tapée au POS "
+                f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}, {delay:+.0f} min) — "
+                f"commande annulée sur Glovo mais ticket caisse présent.",
+                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
+                source_ref=str(g["order_id"]),
+                amount_pos=p["total"], amount_source=g["amount"],
+                payment_pos=p["payment_type"],
+                payment_source=GLOVO_PAYMENT_MAP.get(g["payment_type"]),
+            ))
+
     # Tickets classés Glovo non appariés.
     for idx, p in pool:
         if idx not in used:
