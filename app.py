@@ -130,6 +130,17 @@ if "result" in st.session_state:
     m4.metric("🔴 Haute", summary["severity"].get("haute", 0))
     m5.metric("🟠 Moyenne", summary["severity"].get("moyenne", 0))
 
+    _period = (f"📅 Période analysée (d'après le POS) : **{summary.get('pos_date_min','')}** "
+               f"→ **{summary.get('pos_date_max','')}**.")
+    _ex = []
+    if summary.get("glovo_excluded"):
+        _ex.append(f"{summary['glovo_excluded']} commande(s) Glovo")
+    if summary.get("site_excluded"):
+        _ex.append(f"{summary['site_excluded']} commande(s) Site")
+    if _ex:
+        _period += " " + " et ".join(_ex) + " hors de cette période ont été ignorée(s)."
+    st.info(_period)
+
     # Répartition par canal
     ch = summary["channels"]
     if ch:

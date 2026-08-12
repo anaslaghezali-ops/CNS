@@ -501,9 +501,40 @@
   // ----------------------------------------------------------------------- //
   // Orchestration
   // ----------------------------------------------------------------------- //
+  // Le fichier POS définit la PÉRIODE d'analyse : les commandes Glovo/Site
+  // hors des dates présentes dans le POS sont ignorées (une commande d'un jour
+  // non couvert par le POS ne doit pas être signalée comme « absente »).
+  function posDateSet(pos) {
+    var set = new Set();
+    pos.forEach(function (p) { var k = dateKey(p.datetime); if (k) set.add(k); });
+    return set;
+  }
+
+  function filterToPosDates(rows, getDate, posDates) {
+    var kept = [], excluded = 0;
+    rows.forEach(function (r) {
+      var k = dateKey(getDate(r));
+      if (k && !posDates.has(k)) { excluded++; return; }  // hors période -> ignoré
+      kept.push(r);
+    });
+    return { kept: kept, excluded: excluded };
+  }
+
   function run(pos, glovo, naps, site) {
     var siteIds = site ? new Set(site.map(function (x) { return x.identifiant; })) : null;
     addChannel(pos, siteIds);
+
+    // Restreindre Glovo et Site aux dates présentes dans le POS.
+    var posDates = posDateSet(pos);
+    var glovoExcluded = 0, siteExcluded = 0;
+    if (glovo) {
+      var gf = filterToPosDates(glovo, function (g) { return g.received_at; }, posDates);
+      glovo = gf.kept; glovoExcluded = gf.excluded;
+    }
+    if (site) {
+      var sf = filterToPosDates(site, function (o) { return o.created_at; }, posDates);
+      site = sf.kept; siteExcluded = sf.excluded;
+    }
 
     var anomalies = [];
     if (site) anomalies = anomalies.concat(reconcileSite(pos, site));
@@ -514,6 +545,11 @@
 
     annotate(pos, anomalies);
     var summary = buildSummary(pos, anomalies, glovo, naps, site);
+    var dates = Array.from(posDates).sort();
+    summary.pos_date_min = dates.length ? dates[0] : "";
+    summary.pos_date_max = dates.length ? dates[dates.length - 1] : "";
+    summary.glovo_excluded = glovoExcluded;
+    summary.site_excluded = siteExcluded;
     return { anomalies: anomalies, pos: pos, summary: summary };
   }
 

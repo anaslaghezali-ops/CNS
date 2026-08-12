@@ -101,6 +101,16 @@
              '</div><div class="value">' + m[1] + "</div></div>";
     }).join("");
 
+    // Période analysée (définie par le POS) + éléments hors-période ignorés
+    var period = document.getElementById("period");
+    var txt = "📅 Période analysée (d'après le POS) : <b>" +
+              escapeHtml(sm.pos_date_min) + "</b> → <b>" + escapeHtml(sm.pos_date_max) + "</b>.";
+    var ex = [];
+    if (sm.glovo_excluded) ex.push(sm.glovo_excluded + " commande(s) Glovo");
+    if (sm.site_excluded) ex.push(sm.site_excluded + " commande(s) Site");
+    if (ex.length) txt += " " + ex.join(" et ") + " hors de cette période ont été ignorée(s).";
+    period.innerHTML = txt;
+
     // Graphique par canal
     var ch = sm.channels;
     var keys = Object.keys(ch);
@@ -192,11 +202,14 @@
     // Résumé
     var resume = [
       ["Indicateur", "Valeur"],
+      ["Période analysée (POS)", (sm.pos_date_min || "") + " → " + (sm.pos_date_max || "")],
       ["Transactions POS", sm.pos_transactions],
       ["Total POS (DH)", Math.round(sm.pos_total * 100) / 100],
-      ["Commandes Glovo (livrées)", sm.glovo_orders],
+      ["Commandes Glovo (livrées, période)", sm.glovo_orders],
+      ["Commandes Glovo hors période (ignorées)", sm.glovo_excluded || 0],
       ["Transactions NAPS", sm.naps_transactions],
-      ["Commandes Site", sm.site_orders],
+      ["Commandes Site (période)", sm.site_orders],
+      ["Commandes Site hors période (ignorées)", sm.site_excluded || 0],
       ["", ""],
       ["Anomalies — total", sm.n_anomalies],
       ["  dont haute", sm.severity.haute || 0],

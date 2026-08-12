@@ -53,11 +53,15 @@ def _anomalies_dataframe(anomalies: list[dict]) -> pd.DataFrame:
 
 def _summary_dataframe(summary: dict) -> pd.DataFrame:
     rows = [
+        ("Période analysée (POS)",
+         f"{summary.get('pos_date_min', '')} → {summary.get('pos_date_max', '')}"),
         ("Transactions POS", summary["pos_transactions"]),
         ("Total POS (DH)", round(summary["pos_total"], 2)),
-        ("Commandes Glovo (livrées)", summary["glovo_orders"]),
+        ("Commandes Glovo (livrées, période)", summary["glovo_orders"]),
+        ("Commandes Glovo hors période (ignorées)", summary.get("glovo_excluded", 0)),
         ("Transactions NAPS", summary["naps_transactions"]),
-        ("Commandes Site", summary["site_orders"]),
+        ("Commandes Site (période)", summary["site_orders"]),
+        ("Commandes Site hors période (ignorées)", summary.get("site_excluded", 0)),
         ("", ""),
         ("Anomalies — total", summary["n_anomalies"]),
         ("  dont gravité haute", summary["severity"].get("haute", 0)),

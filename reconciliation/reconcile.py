@@ -424,6 +424,19 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
     site_ids = set(site_df["identifiant"].astype(str)) if site_df is not None else set()
     pos = add_channel_column(pos_df, site_ids)
 
+    # Le POS définit la période d'analyse : on ignore les commandes Glovo/Site
+    # dont la date n'est pas présente dans le POS (jours non couverts).
+    pos_dates = set(pos["datetime"].dropna().dt.date)
+    glovo_excluded = site_excluded = 0
+    if glovo_df is not None and pos_dates:
+        mask = glovo_df["received_at"].dt.date.isin(pos_dates) | glovo_df["received_at"].isna()
+        glovo_excluded = int((~mask).sum())
+        glovo_df = glovo_df[mask].reset_index(drop=True)
+    if site_df is not None and pos_dates:
+        mask = site_df["created_at"].dt.date.isin(pos_dates) | site_df["created_at"].isna()
+        site_excluded = int((~mask).sum())
+        site_df = site_df[mask].reset_index(drop=True)
+
     all_anomalies = []
     glovo_matches = {}
 
@@ -440,6 +453,11 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
 
     pos_annotated = _annotate_pos(pos, all_anomalies)
     summary = _build_summary(pos, all_anomalies, glovo_df, naps_df, site_df)
+    dates = sorted(pos_dates)
+    summary["pos_date_min"] = str(dates[0]) if dates else ""
+    summary["pos_date_max"] = str(dates[-1]) if dates else ""
+    summary["glovo_excluded"] = glovo_excluded
+    summary["site_excluded"] = site_excluded
     return all_anomalies, pos_annotated, summary
 
 
