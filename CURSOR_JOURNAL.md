@@ -325,6 +325,18 @@ risque principal est l'**Online / Bank Transfer** sans commande Glovo réelle.
 
 ---
 
+### 2026-08-12 — Doublon : préciser Cash vs Bank Transfer dans le surplus POS
+
+**Demandé par** : gérant (ex. ticket 167 : +98 DH — en Cash ou BT ?).
+
+**Changement** : message « Ticket en double (correction) » indique le détail par
+mode de paiement, ex. `+98 DH → 98 DH en « Bank Transfer » — surplus uniquement
+en Bank Transfer (pas en Cash)`.
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :
