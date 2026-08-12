@@ -716,6 +716,31 @@ appariement montant+heure si n° absent · ligne détail « À récupérer : Hib
 
 ---
 
+### 2026-08-12 — Glovo : numéro mal saisi (SP/EMP au lieu du n° commande)
+
+**Demandé par** : gérant — commande 101718699078 (190 DH Online 21:55) absente +
+ticket Sp235 (BT 190 DH 21:56) classé sur place ; écart nombre 48 vs 47.
+
+**Règle** : phase 2b — appariement montant + paiement + fenêtre sur tickets SP/EMP/libre
+(avant écart montant) · anomalie « Numéro Glovo mal saisi » · suggestion absente
+priorise montant+paiement+heure avant produits.
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
+### 2026-08-12 — Glovo : écart de nombre = erreur (strict)
+
+**Demandé par** : gérant — nombre commandes Glovo doit égaler tickets POS Glovo ;
+sinon erreur de saisie du nom de ticket.
+
+**Règle** : anomalies **haute** si total livrées ≠ tickets canal Glovo, ou Online≠BT,
+Cash≠Cash · message explicite (mauvais SP/EMP, etc.) + détail appariements manquants.
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/reconcile.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

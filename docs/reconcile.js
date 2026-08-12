@@ -1290,13 +1290,33 @@
     return types.indexOf(pay) >= 0;
   }
 
+  function glovoUnmatchedSummary(delivered, posGlovo) {
+    var gMiss = 0, pMiss = 0, wrongN = 0;
+    delivered.forEach(function (g) { if (!g.matched_pos_ticket_no) gMiss++; });
+    posGlovo.forEach(function (p) {
+      if (!p.matched_glovo_order) pMiss++;
+      if (p.channel_match === "glovo_wrong_name") wrongN++;
+    });
+    var parts = [];
+    if (gMiss) parts.push(gMiss + " commande(s) sans ticket POS");
+    if (pMiss) parts.push(pMiss + " ticket(s) POS Glovo orphelin(s)");
+    if (wrongN) parts.push(wrongN + " mal saisi(s) (SP/EMP au lieu du n° Glovo)");
+    return parts.join(" · ");
+  }
+
+  var GLOVO_COUNT_RULE =
+    "Règle : chaque commande Glovo livrée doit être tapée au POS sous son n° commande " +
+    "(ticket 1–3 chiffres, bon mode de paiement). Si le nombre diffère, le caissier a " +
+    "probablement tapé un mauvais nom de ticket (SP/EMP, libre, etc.).";
+
   function glovoAggregate(pos, glovo) {
-    // Info : écart de NOMBRE de commandes vs tickets (≠ réconciliation financière en DH).
     var anomalies = [];
     var delivered = glovo.filter(function (g) {
       return (g.status || "").toLowerCase() === "delivered";
     });
     var posGlovo = pos.filter(function (p) { return p.channel === CH_GLOVO; });
+    var gTotal = delivered.length;
+    var pTotal = posGlovo.length;
     var gOnline = delivered.filter(function (g) { return g.payment_type === "Online"; }).length;
     var gCash = delivered.filter(function (g) { return g.payment_type === "Cash"; }).length;
     var pBT = posGlovo.filter(function (p) { return posGlovoHasPayment(p, "Bank Transfer"); }).length;
@@ -1315,24 +1335,38 @@
       pCashAmt += alloc["Cash"] || 0;
     });
 
+    var unmatched = glovoUnmatchedSummary(delivered, posGlovo);
+    var unmatchedNote = unmatched ? " Détail : " + unmatched + "." : "";
+
+    if (gTotal !== pTotal) {
+      anomalies.push(anomaly({
+        source: "Glovo", severity: "haute",
+        type: "Écart nombre commandes Glovo vs tickets POS",
+        detail: "Écart de **nombre** : " + gTotal + " commande(s) Glovo livrée(s) vs " +
+                pTotal + " ticket(s) POS canal Glovo (écart " + (gTotal - pTotal) + "). " +
+                GLOVO_COUNT_RULE + unmatchedNote,
+      }));
+    }
     if (gOnline !== pBT) {
       anomalies.push(anomaly({
-        source: "Glovo", severity: "info",
-        type: "Écart global paiement en ligne (nombre)",
-        detail: "Écart de **nombre** (pas le montant financier) : Glovo Online " + gOnline +
-                " commande(s) vs " + pBT + " ticket(s) POS Bank Transfer (écart " +
-                (gOnline - pBT) + "). Montants : Glovo " + Math.round(gOnlineAmt) + " DH vs POS " +
-                Math.round(pBTAmt) + " DH — voir ligne « Glovo Online » en réconciliation financière.",
+        source: "Glovo", severity: "haute",
+        type: "Écart nombre Glovo Online vs POS Bank Transfer",
+        detail: "Écart de **nombre** : Glovo Online " + gOnline +
+                " commande(s) vs " + pBT + " ticket(s) POS Bank Transfer (canal Glovo) " +
+                "(écart " + (gOnline - pBT) + "). Montants : Glovo " +
+                Math.round(gOnlineAmt) + " DH vs POS " + Math.round(pBTAmt) + " DH. " +
+                GLOVO_COUNT_RULE + unmatchedNote,
       }));
     }
     if (gCash !== pCash) {
       anomalies.push(anomaly({
-        source: "Glovo", severity: "info",
-        type: "Écart global paiement cash (nombre)",
-        detail: "Écart de **nombre** (pas le montant financier) : Glovo Cash " + gCash +
-                " commande(s) vs " + pCash + " ticket(s) POS Cash (écart " +
-                (gCash - pCash) + "). Montants : Glovo " + Math.round(gCashAmt) + " DH vs POS " +
-                Math.round(pCashAmt) + " DH — si les montants sont égaux, l'écart financier Cash est 0 DH.",
+        source: "Glovo", severity: "haute",
+        type: "Écart nombre Glovo Cash vs POS Cash",
+        detail: "Écart de **nombre** : Glovo Cash " + gCash +
+                " commande(s) vs " + pCash + " ticket(s) POS Cash (canal Glovo) " +
+                "(écart " + (gCash - pCash) + "). Montants : Glovo " +
+                Math.round(gCashAmt) + " DH vs POS " + Math.round(pCashAmt) + " DH. " +
+                GLOVO_COUNT_RULE + unmatchedNote,
       }));
     }
     return anomalies;

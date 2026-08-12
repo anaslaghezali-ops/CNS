@@ -627,25 +627,37 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
 
 
 def glovo_aggregate(pos_df, glovo_df):
-    """Écart global par mode de paiement (info), sur canaux finaux."""
+    """Écart strict nombre commandes livrées vs tickets POS Glovo (erreur si ≠)."""
     anomalies = []
     delivered = glovo_df[glovo_df["status"].str.lower() == "delivered"]
     pos_glovo = pos_df[pos_df["channel_detected"] == CHANNEL_GLOVO]
+    glovo_total = len(delivered)
+    pos_total = len(pos_glovo)
     glovo_online = int((delivered["payment_type"] == "Online").sum())
     glovo_cash = int((delivered["payment_type"] == "Cash").sum())
     pos_bt = int((pos_glovo["payment_type"] == "Bank Transfer").sum())
     pos_cash = int((pos_glovo["payment_type"] == "Cash").sum())
+    rule = (
+        "Règle : chaque commande Glovo livrée doit être tapée au POS sous son n° commande "
+        "(ticket 1–3 chiffres, bon mode de paiement)."
+    )
+    if glovo_total != pos_total:
+        anomalies.append(_anomaly(
+            "Glovo", "haute", "Écart nombre commandes Glovo vs tickets POS",
+            f"{glovo_total} commande(s) livrée(s) vs {pos_total} ticket(s) POS Glovo "
+            f"(écart {glovo_total - pos_total}). {rule}",
+        ))
     if glovo_online != pos_bt:
         anomalies.append(_anomaly(
-            "Glovo", "info", "Écart global paiement en ligne",
-            f"Glovo 'Online' : {glovo_online} vs POS 'Bank Transfer' (tickets Glovo) : "
-            f"{pos_bt} → écart de {glovo_online - pos_bt}.",
+            "Glovo", "haute", "Écart nombre Glovo Online vs POS Bank Transfer",
+            f"Glovo Online : {glovo_online} vs POS Bank Transfer (Glovo) : {pos_bt} "
+            f"(écart {glovo_online - pos_bt}). {rule}",
         ))
     if glovo_cash != pos_cash:
         anomalies.append(_anomaly(
-            "Glovo", "info", "Écart global paiement cash",
-            f"Glovo 'Cash' : {glovo_cash} vs POS 'Cash' (tickets Glovo) : "
-            f"{pos_cash} → écart de {glovo_cash - pos_cash}.",
+            "Glovo", "haute", "Écart nombre Glovo Cash vs POS Cash",
+            f"Glovo Cash : {glovo_cash} vs POS Cash (Glovo) : {pos_cash} "
+            f"(écart {glovo_cash - pos_cash}). {rule}",
         ))
     return anomalies
 
