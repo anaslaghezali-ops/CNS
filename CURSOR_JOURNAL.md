@@ -76,6 +76,37 @@ dans branche `Cursor`.
 
 ---
 
+### 2026-08-12 — Réconciliation financière Glovo : écart Cash vs Online
+
+**Demandé par** : gérant / utilisateur (session Cursor).
+
+**Problème** : la ligne Glovo agrégée (−602 DH) ne permettait pas de savoir si
+l'écart venait des commandes **Cash** ou **Online** (Bank Transfer au POS).
+
+**Règle appliquée** : trois lignes dans le tableau financier :
+
+| Ligne | Côté POS | Côté Glovo |
+|-------|----------|------------|
+| Glovo — Online | Tickets Glovo « Bank Transfer » | Livrées `Online` (W − AE) |
+| Glovo — Cash | Tickets Glovo « Cash » | Livrées `Cash` (W − AE) |
+| Glovo — Total | Tous tickets Glovo | Toutes livrées (W − AE) |
+
+Écart = source − POS (identique aux autres lignes).
+
+**Fichiers modifiés** :
+
+| Fichier | Changement |
+|---------|------------|
+| `docs/reconcile.js` | `computeFinancial` : détail Online + Cash + total |
+| `docs/app.js` | Styles lignes sous-total Glovo |
+| `docs/index.html` | Texte d'aide |
+| `docs/style.css` | `.fin-glovo-sub`, `.fin-total` |
+
+**Note** : réconciliation financière **navigateur uniquement** (pas encore dans
+Streamlit Python).
+
+---
+
 ### Antérieur (branche `claude/chicknster-reconciliation-system-460chx`)
 
 Modifications déjà présentes **avant** la session Cursor du 12 août — ne pas
