@@ -308,6 +308,23 @@ Transfer). L'écart financier retire la copie en trop du bon bucket de paiement.
 
 ---
 
+### 2026-08-12 — Ticket 15 : pas un doublon (n° Glovo réutilisé pour Cash)
+
+**Cas** : deux lignes POS « 15 » (122,5 DH Online + Cash séparé) classées comme
+correction — en réalité la ligne 144 = Glovo `101739184927` (135 W−AE), la ligne
+Cash = **autre vente** au même numéro (erreur de saisie).
+
+**Règle** : doublon/correction seulement si même commande (montant, produits,
+une seule commande Glovo). Sinon → anomalie **« Numéro Glovo réutilisé »** +
+contrôle enveloppe cash.
+
+**Logique anti-vol** (gérant) : le Cash POS doit sortir dans l'enveloppe ; le
+risque principal est l'**Online / Bank Transfer** sans commande Glovo réelle.
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :

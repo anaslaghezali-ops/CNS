@@ -880,10 +880,89 @@
     });
   }
 
-  // plusieurs fois à quelques minutes d'intervalle = commande re-tapée (souvent
-  // une correction). On ne traite QUE les numéros (jamais sp/emp, qui peuvent
-  // légitimement se répéter). Remplace l'anomalie « orphelin » par une
-  // « correction » détaillant les changements (montant, paiement).
+  function glovoMatchForPosLine(p, glovo, wideWindow) {
+    if (!glovo || p.channel !== CH_GLOVO || !p.datetime) return null;
+    var afterMin = wideWindow ? 120 : WINDOW_AFTER_MIN;
+    var best = null, bestScore = 1e9;
+    glovo.forEach(function (g) {
+      if ((g.status || "").toLowerCase() !== "delivered" || !g.received_at) return;
+      var exp = GLOVO_PAYMENT_MAP[g.payment_type];
+      if (p.payment_type !== exp) return;
+      if (isNaN(p.total) || isNaN(g.amount) || Math.abs(p.total - g.amount) > AMOUNT_TOL) return;
+      if (p.datetime < new Date(g.received_at.getTime() - WINDOW_BEFORE_MIN * 60000) ||
+          p.datetime > new Date(g.received_at.getTime() + afterMin * 60000)) return;
+      var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
+      var score = gap;
+      if (p.designations && g.order_items) score -= productSimilarity(p.designations, g.order_items) * 0.5;
+      if (score < bestScore) { bestScore = score; best = g; }
+    });
+    return best;
+  }
+
+  /** Vrai doublon = re-tapé pour corriger LA MÊME commande (pas deux ventes différentes au même n°). */
+  function isLikelyCorrectionCluster(cl, glovo) {
+    if (cl.length < 2) return false;
+    var glovoByOrder = {};
+    cl.forEach(function (p) {
+      var m = glovoMatchForPosLine(p, glovo, true);
+      if (m) glovoByOrder[m.order_id] = m;
+    });
+    var orderIds = Object.keys(glovoByOrder);
+    if (orderIds.length > 1) return false;
+
+    var nonZero = cl.filter(function (p) { return !isNaN(p.total) && p.total > AMOUNT_TOL; });
+    if (nonZero.length >= 2) {
+      var t0 = nonZero[0].total;
+      for (var i = 1; i < nonZero.length; i++) {
+        if (Math.abs(nonZero[i].total - t0) > AMOUNT_TOL) return false;
+      }
+    }
+
+    if (orderIds.length === 1) {
+      var g = glovoByOrder[orderIds[0]];
+      for (var j = 0; j < cl.length; j++) {
+        var pj = cl[j];
+        if (glovoMatchForPosLine(pj, glovo, true)) continue;
+        if (pj.designations && g.order_items &&
+            productSimilarity(pj.designations, g.order_items) < 0.3) return false;
+        if (!isNaN(pj.total) && pj.total > AMOUNT_TOL &&
+            Math.abs(pj.total - g.amount) > AMOUNT_TOL) return false;
+      }
+    } else {
+      var base = cl[0];
+      for (var k = 1; k < cl.length; k++) {
+        if (base.designations && cl[k].designations &&
+            productSimilarity(base.designations, cl[k].designations) < 0.35) return false;
+        if (!isNaN(base.total) && !isNaN(cl[k].total) &&
+            base.total > AMOUNT_TOL && cl[k].total > AMOUNT_TOL &&
+            Math.abs(base.total - cl[k].total) > AMOUNT_TOL) return false;
+      }
+    }
+    return true;
+  }
+
+  function flagMisusedGlovoNumber(p, matchedLine, matchedG) {
+    var amt = isNaN(p.total) ? 0 : p.total;
+    var amtTxt = amt > AMOUNT_TOL ? amt.toFixed(0) + " DH" :
+      (amt === 0 ? "0 DH (annulée ou montant nul — vérifier)" : "?");
+    var sibling = matchedG && matchedLine
+      ? " La commande Glovo " + matchedG.order_id + " (" + matchedG.amount.toFixed(0) +
+        " DH " + matchedG.payment_type + ") est sur la ligne " + matchedLine.row + "."
+      : "";
+    return posAnomaly(p, {
+      source: "Glovo", severity: "moyenne",
+      type: "Numéro Glovo réutilisé (vente distincte)",
+      detail: "Ticket POS " + p.ticket_name + " (" + hhmm(p.datetime) + ", " + amtTxt +
+              " Cash, ligne " + p.row + ") — autre encaissement au même n° Glovo, pas une correction." +
+              sibling +
+              " ⚠️ Cash réel : à contrôler dans l'enveloppe caissier.",
+      amount_pos: amt > AMOUNT_TOL ? amt : null,
+      payment_pos: "Cash",
+    });
+  }
+
+  // DOUBLONS : même n° tapé plusieurs fois = correction UNIQUEMENT si c'est la
+  // même commande (montant / produits / Glovo). Sinon = ventes distinctes au même n°.
   // ----------------------------------------------------------------------- //
   var DUP_WINDOW_MIN = 30;
 
@@ -894,8 +973,7 @@
         (groups[p.ticket_name] = groups[p.ticket_name] || []).push(p);
       }
     });
-    var handled = {};  // ticket_name -> true : retirer l'anomalie orpheline (legacy)
-    var handledNo = {};  // ticket_no consommés par un cluster doublon
+    var handledNo = {};  // ticket_no consommés par un vrai cluster doublon
     Object.keys(groups).forEach(function (name) {
       var list = groups[name];
       if (list.length < 2) return;
@@ -915,7 +993,23 @@
 
       clusters.forEach(function (cl) {
         if (cl.length < 2) return;
-        handled[name] = true;
+
+        if (!isLikelyCorrectionCluster(cl, glovo)) {
+          var matchedLine = null, matchedG = null;
+          cl.forEach(function (p) {
+            var m = glovoMatchForPosLine(p, glovo, true);
+            if (m) { matchedLine = p; matchedG = m; }
+          });
+          cl.forEach(function (p) {
+            if (glovoMatchForPosLine(p, glovo, true)) return;
+            if (p.channel !== CH_GLOVO) return;
+            if (p.payment_type === "Cash") {
+              anomalies.push(flagMisusedGlovoNumber(p, matchedLine, matchedG));
+            }
+          });
+          return;
+        }
+
         cl.forEach(function (p) { if (p.ticket_no) handledNo[p.ticket_no] = true; });
         var first = cl[0], last = cl[cl.length - 1];
         var glovoRef = findGlovoForDuplicate(cl, glovo);
@@ -948,12 +1042,6 @@
             dupVers.map(function (p) {
               return "v" + (cl.indexOf(p) + 1) + " ligne " + p.row + " (" + p.payment_type + ")";
             }).join(", ") + ".";
-          if (glovoRef.order_items && retainVer.designations) {
-            var ps = productSimilarity(retainVer.designations, glovoRef.order_items);
-            if (ps >= 0.25) {
-              retainNote += " [✓ Produits compatibles " + Math.round(ps * 100) + "%]";
-            }
-          }
         } else if (first.payment_type !== last.payment_type) {
           retainNote = " Sans commande Glovo retrouvée : retenir en principe la dernière saisie v" +
             cl.length + " (" + last.payment_type + ") si c'est la correction — vérifier manuellement.";
@@ -977,7 +1065,6 @@
       if (a.type !== "Ticket Glovo au POS sans commande correspondante" &&
           a.type !== "Ticket Site au POS sans commande correspondante") return true;
       if (a.pos_ticket_no && handledNo[a.pos_ticket_no]) return false;
-      if (handled[a.ticket_name]) return false;
       return true;
     });
   }
