@@ -683,6 +683,17 @@ absent du TPE » (ticket Sp5) a un User POS.
 
 ---
 
+### 2026-08-12 — Cash à collecter : nom du caissier dans le bandeau résumé
+
+**Demandé par** : gérant — +164 DH visible mais pas « chez qui » (ex. Hiba / Sp5).
+
+**Fix** : sous « À collecter des caissiers », chips **Hiba +164 DH** directement dans
+le bandeau ; correction ordre `site`/`naps` dans `enrichFinCashCollect`.
+
+**Fichiers** : `docs/app.js`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

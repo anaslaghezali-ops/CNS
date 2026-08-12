@@ -487,12 +487,24 @@
         var ecartCls = ca > 0 ? "cc-ecart-pos" : "cc-ecart-neg";
         var collectLbl = ca > 0 ? "À collecter : +" + fmtDH(ca) :
           (ca < 0 ? "Sur-saisie POS : " + fmtDH(ca) : "");
+        var whoHtml = "";
+        if (it.collect_by_user && ca > 0.5) {
+          var whoParts = Object.keys(it.collect_by_user).filter(function (u) {
+            return (it.collect_by_user[u] || 0) > 0.5;
+          }).map(function (u) {
+            return "<b>" + escapeHtml(u) + "</b> +" + fmtDH(it.collect_by_user[u]);
+          });
+          if (whoParts.length) {
+            whoHtml = "<div class='cc-item-who'>À récupérer : " + whoParts.join(" · ") + "</div>";
+          }
+        }
         return '<div class="cash-collect-item"><div class="cc-row"><b>' +
           escapeHtml(it.label) + "</b><span>" + escapeHtml(it.pos_label) + " : <b>" +
           fmtDH(it.pos) + "</b></span><span>" + escapeHtml(it.src_label) + " : <b>" +
           fmtDH(it.src) + "</b></span>" +
           (collectLbl ? "<span class='" + ecartCls + "'>" + collectLbl + "</span>" : "") +
           "</div>" +
+          whoHtml +
           (it.hint ? "<div class='cc-hint'>" + escapeHtml(it.hint) + "</div>" : "") +
           "</div>";
       }).join("") + "</div>";

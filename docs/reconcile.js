@@ -2197,20 +2197,60 @@
     return contribs;
   }
 
-  function collectSiteEmporterContributions(pos, site) {
+  function posCounterAmount(p) {
+    var alloc = allocatePosPaymentAmounts(p);
+    return (alloc.Cash || 0) + (alloc["Credit card"] || 0);
+  }
+
+  /** Ticket POS lié à une commande site (n° exact, tous canaux, ou anomalie Site). */
+  function findPosForSiteOrder(o, pos, anomalies) {
+    var id = String(o.identifiant);
+    var p = pos.filter(function (x) { return x.ticket_name === id; })[0];
+    if (p) return p;
+    if (!anomalies || !anomalies.length) return null;
+    for (var i = 0; i < anomalies.length; i++) {
+      var a = anomalies[i];
+      if (String(a.source_ref || "") !== id) continue;
+      if (a.source !== "Site" && a.source !== "Sur place" && a.source !== "POS") continue;
+      var px = a.pos_ticket_no ? findPosByTicketNo(pos, a.pos_ticket_no) : null;
+      if (px) return px;
+    }
+    return null;
+  }
+
+  /** Commande site emporter sans ticket au n° — appariement montant + heure (Cash/CC comptoir). */
+  function guessPosForAbsentSiteOrder(o, pos) {
+    if (!o.created_at) return null;
+    var srcAmt = isNaN(o.order_total) ? 0 : o.order_total;
+    if (srcAmt <= AMOUNT_TOL) return null;
+    var candidates = [];
+    pos.forEach(function (p) {
+      if (p.channel === CH_GLOVO) return;
+      var cnt = posCounterAmount(p);
+      var matchAmt = cnt > AMOUNT_TOL ? cnt : (isNaN(p.total) ? 0 : p.total);
+      if (Math.abs(matchAmt - srcAmt) > AMOUNT_TOL) return;
+      if (!p.datetime) return;
+      var gap = Math.abs(minutesBetween(p.datetime, o.created_at));
+      if (gap > SITE_TYPO_WINDOW_MIN) return;
+      candidates.push({ p: p, gap: gap });
+    });
+    if (!candidates.length) return null;
+    candidates.sort(function (a, b) { return a.gap - b.gap; });
+    return candidates[0].p;
+  }
+
+  function collectSiteEmporterContributions(pos, site, anomalies) {
     var contribs = [];
     if (!site) return contribs;
-    var byName = {};
-    pos.forEach(function (p) { byName[p.ticket_name] = p; });
 
     site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
       if (!siteOrderIsTakeout(o)) return;
       var srcAmt = isNaN(o.order_total) ? 0 : o.order_total;
       if (srcAmt <= AMOUNT_TOL) return;
-      var p = byName[o.identifiant];
-      if (p && p.channel === CH_SITE) {
-        var alloc = allocatePosPaymentAmounts(p);
-        var posCnt = (alloc.Cash || 0) + (alloc["Credit card"] || 0);
+      var p = findPosForSiteOrder(o, pos, anomalies);
+      if (!p) p = guessPosForAbsentSiteOrder(o, pos);
+      if (p) {
+        var posCnt = posCounterAmount(p);
         var delta = srcAmt - posCnt;
         if (Math.abs(delta) > AMOUNT_TOL) {
           contribs.push({
@@ -2221,11 +2261,13 @@
             ticket_name: p.ticket_name,
             when: dtFull(p.datetime),
             detail: "Site emporter " + o.identifiant + " : " + srcAmt.toFixed(0) +
-              " DH vs POS comptoir " + posCnt.toFixed(0) + " DH",
+              " DH vs POS comptoir " + posCnt.toFixed(0) + " DH" +
+              (p.ticket_name !== o.identifiant ? " (ticket " + p.ticket_name + ")" : ""),
             source_ref: o.identifiant,
+            guessed: p.ticket_name !== o.identifiant,
           });
         }
-      } else if (!p) {
+      } else {
         contribs.push({
           user: CASH_COLLECT_UNATTRIBUTED,
           amount: srcAmt,
@@ -2238,6 +2280,55 @@
           source_ref: o.identifiant,
         });
       }
+    });
+    return contribs;
+  }
+
+  /** Site emporter — complément via anomalies Site (ticket POS + User col. F). */
+  function collectSiteEmporterFromAnomalies(pos, site, anomalies, existing) {
+    var contribs = [];
+    if (!site || !anomalies || !anomalies.length) return contribs;
+    var seen = {};
+    if (existing) existing.forEach(function (c) {
+      if (c.source_ref) seen[c.source_ref] = true;
+    });
+    var siteById = {};
+    site.forEach(function (o) { siteById[o.identifiant] = o; });
+
+    var SITE_EMPORTER_ANOM_TYPES = [
+      "Mode de paiement incorrect (commande à emporter)",
+      "Numéro de commande mal saisi (faute de frappe)",
+      "Commande rattachée (ticket sans numéro)",
+    ];
+
+    anomalies.forEach(function (a) {
+      if (SITE_EMPORTER_ANOM_TYPES.indexOf(a.type) < 0) return;
+      if (a.source !== "Site" && a.source !== "POS") return;
+      var sid = a.source_ref;
+      if (!sid) return;
+      var o = siteById[sid];
+      if (!o || !siteOrderIsTakeout(o)) return;
+      if (seen[sid]) return;
+      var p = a.pos_ticket_no ? findPosByTicketNo(pos, a.pos_ticket_no) : null;
+      if (!p) p = findPosForSiteOrder(o, pos, anomalies);
+      if (!p) return;
+      var srcAmt = isNaN(o.order_total) ? 0 : o.order_total;
+      var posCnt = posCounterAmount(p);
+      var delta = srcAmt - posCnt;
+      if (Math.abs(delta) <= AMOUNT_TOL) return;
+      seen[sid] = true;
+      contribs.push({
+        user: posUserLabel(p),
+        amount: delta,
+        lineKey: "site_cash",
+        ticket_no: p.ticket_no,
+        ticket_name: p.ticket_name,
+        when: a.when || dtFull(p.datetime),
+        detail: "Site emporter " + sid + " : " + srcAmt.toFixed(0) +
+          " DH vs POS comptoir " + posCnt.toFixed(0) + " DH (" + a.type + ")",
+        source_ref: sid,
+        anomaly_id: a.id,
+      });
     });
     return contribs;
   }
@@ -2358,16 +2449,37 @@
     return contribs;
   }
 
+  function enrichCashCollectItemUsers(cc) {
+    if (!cc || !cc.items || !cc.ticket_contributions) return cc;
+    var byLineUser = {};
+    cc.ticket_contributions.forEach(function (c) {
+      if (Math.abs(c.amount) < AMOUNT_TOL) return;
+      var lk = c.lineKey || "";
+      if (!byLineUser[lk]) byLineUser[lk] = {};
+      var u = c.user || CASH_COLLECT_UNATTRIBUTED;
+      byLineUser[lk][u] = (byLineUser[lk][u] || 0) + c.amount;
+    });
+    cc.items.forEach(function (it) {
+      var m = byLineUser[it.lineKey];
+      if (m) it.collect_by_user = m;
+    });
+    return cc;
+  }
+
   function finalizeCashToCollectUsers(cc, pos, glovo, site, naps, posDates, anomalies) {
     if (!cc) return cc;
     var contribs = collectGlovoCashContributions(pos, glovo);
-    contribs = contribs.concat(collectSiteEmporterContributions(pos, site));
+    var siteContribs = collectSiteEmporterContributions(pos, site, anomalies);
+    var siteAnom = collectSiteEmporterFromAnomalies(pos, site, anomalies, siteContribs);
+    contribs = contribs.concat(siteContribs);
+    if (siteAnom.length) contribs = contribs.concat(siteAnom);
     var napsAnom = collectNapsTpeFromAnomalies(pos, anomalies);
     if (napsAnom.length) contribs = contribs.concat(napsAnom);
     else contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
     stampCashContributions(contribs);
     cc.ticket_contributions = contribs;
     cc.by_user = aggregateCashCollectByUser(contribs);
+    enrichCashCollectItemUsers(cc);
     return cc;
   }
 
