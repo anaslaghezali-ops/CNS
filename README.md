@@ -29,7 +29,7 @@ accessible à :
 | Fichier | Rôle | Clé de rapprochement avec le POS |
 |---------|------|----------------------------------|
 | **POS (Mahaal)** | Fichier maître : toutes les transactions caisse | — |
-| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W) · heure (≤ 10 min après réception) |
+| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W − col AE) · heure (≤ 10 min après réception) |
 | **NAPS (TPE)** | Relevé des paiements par carte | Date (col I) + montant (col N) → paiements `Credit card` |
 | **Site** | Commandes du site web | Identifiant (col A) = ticket name |
 
@@ -41,7 +41,7 @@ accessible à :
 |-------------|-------|--------------------|
 | `1-3 chiffres` (ex. `137`) | Glovo | Bank Transfer / Cash |
 | `5 chiffres` (ex. `58379`) | Site | Bank Transfer |
-| `sp…` / `emp…` | Sur place / À emporter | Cash / Credit card |
+| `sp…` / `emp…` (ex. `sp`, `9sp`, `emp2`) | Sur place / À emporter | Cash / Credit card |
 | *(vide)* | À rattacher | recherche par heure |
 
 **Correspondances de paiement :**
@@ -102,3 +102,9 @@ CNS/
 
 Les fichiers réels du restaurant ne sont **pas** versionnés (voir
 `.gitignore`). Le traitement se fait localement, en mémoire.
+
+## Modifications Cursor (agent IA)
+
+Les changements faits via **Cursor Cloud Agent** sont poussés sur la branche
+`Cursor` et documentés dans [`CURSOR_JOURNAL.md`](CURSOR_JOURNAL.md) (règles
+métier, fichiers touchés, contexte pour les sessions suivantes).

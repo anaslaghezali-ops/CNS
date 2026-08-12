@@ -166,7 +166,8 @@ def _parse_pos_datetime(date_series, hour_series) -> pd.Series:
 def load_glovo(source) -> pd.DataFrame:
     """
     Colonnes normalisées :
-      order_id, payment_type, received_at, status, earnings, subtotal
+      order_id, payment_type, received_at, status, earnings,
+      subtotal, discount_funded, amount (subtotal − discount_funded)
     """
     # La vraie ligne d'en-tête est la 2e (la 1re regroupe des catégories).
     header_row = _find_header_row(source, ["Order ID", "Payment type"])
@@ -179,10 +180,14 @@ def load_glovo(source) -> pd.DataFrame:
         "Order received at": "received_at",
         "Estimated earnings": "earnings",
         "Subtotal": "subtotal",
+        "Discount Funded by you": "discount_funded",
     }
     df = df.rename(columns=rename)
 
-    keep = ["order_id", "payment_type", "status", "received_at", "earnings", "subtotal"]
+    keep = [
+        "order_id", "payment_type", "status", "received_at", "earnings",
+        "subtotal", "discount_funded",
+    ]
     df = df[[c for c in keep if c in df.columns]].copy()
 
     df = df[df["order_id"].apply(lambda x: _clean_str(x) != "")].copy()
@@ -192,6 +197,12 @@ def load_glovo(source) -> pd.DataFrame:
     df["earnings"] = pd.to_numeric(df["earnings"], errors="coerce")
     if "subtotal" in df.columns:
         df["subtotal"] = pd.to_numeric(df["subtotal"], errors="coerce")
+    if "discount_funded" in df.columns:
+        df["discount_funded"] = pd.to_numeric(df["discount_funded"], errors="coerce").fillna(0)
+    else:
+        df["discount_funded"] = 0.0
+    # Montant de rapprochement Glovo — voir CURSOR_JOURNAL.md (2026-08-12 : W − AE).
+    df["amount"] = df["subtotal"] - df["discount_funded"] if "subtotal" in df.columns else pd.NA
 
     df = df.reset_index(drop=True)
     return df

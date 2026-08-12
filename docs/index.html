@@ -62,14 +62,15 @@
 
       <hr />
       <h2>💰 Réconciliation financière</h2>
-      <p class="muted">Écart = <b>source − POS</b>. Un écart positif = la source a encaissé plus que ce qui est saisi au POS (ex. TPE 140 vs POS 100 → +40 manquants au POS).</p>
+      <p class="muted">Écart = <b>source − POS</b>. Un écart positif = la source a encaissé plus que ce qui est saisi au POS. Pour <b>Glovo</b>, l’écart est détaillé par <b>Online → Bank Transfer</b> et <b>Cash</b>. Clique sur <b>🔍 Voir l’écart</b> pour lister les anomalies qui l’expliquent.</p>
       <div class="table-wrap"><table id="fin-lines"></table></div>
+      <div id="fin-ecart-detail" class="fin-ecart-detail hidden"></div>
       <p class="muted" style="margin-top:18px">Répartition des montants POS par <b>mode de paiement × canal</b> (d'où vient l'argent) :</p>
       <div class="table-wrap"><table id="fin-matrix"></table></div>
 
       <hr />
       <h2>🚨 Anomalies</h2>
-      <p class="muted">Éléments à corriger (Haute + Moyenne). Les rattachements et notes sont dans la section « Infos » plus bas.</p>
+      <p class="muted">Éléments à corriger (Haute + Moyenne). Clique sur <b>✅ Valider</b> une fois traité : l'anomalie sort des calculs (vue d'ensemble + réconciliation financière). Les rattachements et notes sont dans « Infos ».</p>
       <div class="filters">
         <div>
           <span class="filter-label">Gravité :</span>
@@ -82,6 +83,13 @@
       </div>
       <div id="anom-count" class="muted"></div>
       <div class="table-wrap"><table id="anom-table"></table></div>
+
+      <section id="validated-section" class="hidden validated-block">
+        <h3>✅ Anomalies validées</h3>
+        <p class="muted">Exclues des compteurs et de la réconciliation financière. <b>↩ Annuler</b> pour les réintégrer.</p>
+        <div id="validated-count" class="muted"></div>
+        <div class="table-wrap"><table id="validated-table"></table></div>
+      </section>
 
       <hr />
       <h2>🔵 Infos <span class="muted" style="font-size:.9rem;font-weight:400">(rattachements & notes — pas des anomalies)</span></h2>

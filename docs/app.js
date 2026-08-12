@@ -3,10 +3,11 @@
   "use strict";
 
   var files = { pos: null, glovo: null, naps: null, site: null };
-  var state = null; // { anomalies, pos, summary }
+  var state = null; // { anomalies, pos, summary, validated: { id: true } }
 
   var SEV_BADGE = { haute: "🔴 Haute", moyenne: "🟠 Moyenne", info: "🔵 Info" };
   var SEV_ORDER = { haute: 0, moyenne: 1, info: 2 };
+  var finDetailLineKey = null;
 
   // ---- Sélection de fichiers -------------------------------------------- //
   document.querySelectorAll(".drop").forEach(function (drop) {
@@ -26,7 +27,6 @@
     });
   });
 
-  // ---- Lecture d'un fichier -> worksheet -------------------------------- //
   function readSheet(file) {
     return new Promise(function (resolve, reject) {
       var reader = new FileReader();
@@ -45,7 +45,6 @@
 
   function setMessage(html) { document.getElementById("message").innerHTML = html || ""; }
 
-  // ---- Lancer la réconciliation ----------------------------------------- //
   document.getElementById("run").addEventListener("click", function () {
     setMessage("");
     if (!files.pos) {
@@ -68,6 +67,8 @@
         var naps = sheets[2] ? CNS.loadNAPS(sheets[2]) : null;
         var site = sheets[3] ? CNS.loadSite(sheets[3]) : null;
         state = CNS.run(pos, glovo, naps, site);
+        state.validated = {};
+        finDetailLineKey = null;
         render();
       } catch (err) {
         setMessage('<div class="err">❌ Erreur : ' + escapeHtml(err.message) + "</div>");
@@ -83,26 +84,110 @@
     });
   });
 
+  // ---- Validation des anomalies ----------------------------------------- //
+  function isValidated(id) {
+    return state && state.validated && state.validated[id];
+  }
+
+  function activeAnomalies() {
+    if (!state) return [];
+    return state.anomalies.filter(function (a) { return !isValidated(a.id); });
+  }
+
+  function validatedAnomalies() {
+    if (!state) return [];
+    return state.anomalies.filter(function (a) { return isValidated(a.id); });
+  }
+
+  function fmtTicketLabel(a) {
+    var parts = [];
+    if (a.ticket_name && a.ticket_name !== "(vide)") parts.push(a.ticket_name);
+    if (a.pos_ticket_no) parts.push("#" + a.pos_ticket_no);
+    if (a.when) {
+      var m = String(a.when).match(/\d{2}:\d{2}/);
+      if (m) parts.push(m[0]);
+    }
+    if (!parts.length) return a.ticket_name || "";
+    return parts.join(" · ");
+  }
+
+  function anomalyMatchesPos(a, p) {
+    if (a.pos_ticket_no && p.ticket_no) return a.pos_ticket_no === p.ticket_no;
+    return false;
+  }
+
+  function validateAnomaly(id) {
+    if (!state) return;
+    state.validated[id] = true;
+    refreshPosStatuts();
+    render();
+  }
+
+  function unvalidateAnomaly(id) {
+    if (!state || !state.validated[id]) return;
+    delete state.validated[id];
+    refreshPosStatuts();
+    render();
+  }
+
+  function refreshPosStatuts() {
+    var active = activeAnomalies();
+    state.pos.forEach(function (p) {
+      var related = active.filter(function (a) { return anomalyMatchesPos(a, p); });
+      var sev = {};
+      related.forEach(function (a) { sev[a.severity] = true; });
+      p.statut = (sev.haute || sev.moyenne) ? "⚠️ Anomalie" :
+                 (sev.info ? "ℹ️ Info" : "✅ OK");
+      p.anomalies = related.map(function (a) {
+        return "[" + a.type + "] " + a.detail;
+      }).join(" | ");
+    });
+  }
+
+  function recomputeCounts() {
+    var active = activeAnomalies();
+    var sev = { haute: 0, moyenne: 0, info: 0 };
+    active.forEach(function (a) {
+      sev[a.severity] = (sev[a.severity] || 0) + 1;
+    });
+    return {
+      n_anomalies: sev.haute + sev.moyenne,
+      n_infos: sev.info,
+      severity: sev,
+      n_validated: validatedAnomalies().length,
+    };
+  }
+
+  function getAdjustedFinancial() {
+    if (!state || !state.summary.financial) return null;
+    var validated = validatedAnomalies();
+    if (!validated.length) return state.summary.financial;
+    var adj = CNS.sumFinancialAdjustments(validated);
+    return CNS.applyFinancialAdjustments(state.summary.financial, adj);
+  }
+
   // ---- Rendu ------------------------------------------------------------- //
   function render() {
     document.getElementById("results").classList.remove("hidden");
     var sm = state.summary;
+    var counts = recomputeCounts();
 
-    // Métriques (les « info » ne comptent pas comme anomalies)
     var metrics = [
       ["Transactions POS", sm.pos_transactions],
       ["Total POS (DH)", Math.round(sm.pos_total).toLocaleString("fr-FR")],
-      ["Anomalies", sm.n_anomalies],
-      ["🔴 Haute", sm.severity.haute || 0],
-      ["🟠 Moyenne", sm.severity.moyenne || 0],
-      ["🔵 Infos", sm.n_infos || 0],
+      ["Anomalies", counts.n_anomalies],
+      ["🔴 Haute", counts.severity.haute || 0],
+      ["🟠 Moyenne", counts.severity.moyenne || 0],
+      ["🔵 Infos", counts.n_infos || 0],
     ];
+    if (counts.n_validated) {
+      metrics.push(["✅ Validées (hors calcul)", counts.n_validated]);
+    }
     document.getElementById("metrics").innerHTML = metrics.map(function (m) {
       return '<div class="metric"><div class="label">' + m[0] +
              '</div><div class="value">' + m[1] + "</div></div>";
     }).join("");
 
-    // Période analysée (définie par le POS) + éléments hors-période ignorés
     var period = document.getElementById("period");
     var txt = "📅 Période analysée (d'après le POS) : <b>" +
               escapeHtml(sm.pos_date_min) + "</b> → <b>" + escapeHtml(sm.pos_date_max) + "</b>.";
@@ -112,7 +197,6 @@
     if (ex.length) txt += " " + ex.join(" et ") + " hors de cette période ont été ignorée(s).";
     period.innerHTML = txt;
 
-    // Graphique par canal
     var ch = sm.channels;
     var keys = Object.keys(ch);
     var max = Math.max.apply(null, keys.map(function (k) { return ch[k]; })) || 1;
@@ -123,10 +207,9 @@
              '<div class="bar-label">' + escapeHtml(k) + "</div></div>";
     }).join("");
 
-    renderFinancial(sm.financial);
+    renderFinancial(getAdjustedFinancial());
 
-    // Filtres source
-    var sources = uniq(state.anomalies.map(function (a) { return a.source; }));
+    var sources = uniq(activeAnomalies().map(function (a) { return a.source; }));
     var wrap = document.getElementById("fsrc-wrap");
     wrap.querySelectorAll("label").forEach(function (l) { l.remove(); });
     sources.forEach(function (src) {
@@ -142,6 +225,7 @@
     document.getElementById("only-anom").onchange = renderPos;
 
     renderAnomalies();
+    renderValidated();
     renderInfos();
     renderPos();
   }
@@ -152,22 +236,54 @@
   }
 
   function renderFinancial(fin) {
-    if (!fin) { document.getElementById("fin-lines").innerHTML = ""; return; }
-    // Tableau des écarts par source
+    if (!fin) {
+      document.getElementById("fin-lines").innerHTML = "";
+      document.getElementById("fin-ecart-detail").classList.add("hidden");
+      return;
+    }
+    var prev = document.getElementById("fin-adj-note");
+    if (prev) prev.remove();
+    if (fin.adjustments_applied) {
+      var el = document.createElement("p");
+      el.id = "fin-adj-note";
+      el.className = "muted fin-adj-note";
+      el.innerHTML = "Montants ajustés : les anomalies <b>validées</b> ne sont plus comptées dans les écarts.";
+      document.getElementById("fin-lines").parentNode.insertBefore(el, document.getElementById("fin-lines"));
+    }
     var head = "<thead><tr><th>Source</th><th>Côté POS</th><th>Côté source</th>" +
-               "<th>Écart (source − POS)</th></tr></thead>";
+               "<th>Écart (source − POS)</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + fin.lines.map(function (l) {
       var cls = Math.abs(l.ecart) < 0.5 ? "st-ok" : "st-anom";
       var sign = l.ecart > 0 ? "+" : "";
       var note = l.note ? "<div class='muted' style='font-size:.82rem'>" + escapeHtml(l.note) + "</div>" : "";
-      return "<tr><td><b>" + escapeHtml(l.source) + "</b></td>" +
+      var rowCls = l.isTotal ? "fin-total" : (l.group === "glovo" ? "fin-glovo-sub" : "");
+      var contribs = l.lineKey ? CNS.getFinancialContributors(l.lineKey, activeAnomalies()) : [];
+      var detailCell = "";
+      if (l.lineKey) {
+        var active = finDetailLineKey === l.lineKey;
+        detailCell = "<button type='button' class='btn-fin-detail" +
+          (active ? " active" : "") + "' data-line-key='" + escapeHtml(l.lineKey) +
+          "' data-line-label='" + escapeHtml(l.source) + "'>🔍 Voir l'écart (" +
+          contribs.length + ")</button>";
+      }
+      return "<tr class='" + rowCls + "'><td><b>" + escapeHtml(l.source) + "</b></td>" +
              "<td>" + escapeHtml(l.pos_label) + " : <b>" + fmtDH(l.pos) + "</b></td>" +
              "<td>" + escapeHtml(l.src_label) + " : <b>" + fmtDH(l.src) + "</b>" + note + "</td>" +
-             "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td></tr>";
+             "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td>" +
+             "<td>" + detailCell + "</td></tr>";
     }).join("") + "</tbody>";
-    document.getElementById("fin-lines").innerHTML = head + body;
+    var table = document.getElementById("fin-lines");
+    table.innerHTML = head + body;
+    table.querySelectorAll(".btn-fin-detail").forEach(function (btn) {
+      btn.onclick = function () {
+        var key = btn.getAttribute("data-line-key");
+        finDetailLineKey = finDetailLineKey === key ? null : key;
+        renderFinEcartDetail(fin);
+        renderFinancial(fin);
+      };
+    });
+    renderFinEcartDetail(fin);
 
-    // Matrice canal × paiement
     var pays = fin.pays;
     var chans = Object.keys(fin.matrix);
     var colTot = {}; pays.forEach(function (p) { colTot[p] = 0; }); var grand = 0;
@@ -189,43 +305,135 @@
     document.getElementById("fin-matrix").innerHTML = mhead + mbody;
   }
 
-  function _tableHTML(rows) {
-    var head = "<thead><tr><th>Gravité</th><th>Source</th><th>Type</th>" +
-               "<th>Fichier</th><th>Ligne</th><th>Date/heure</th>" +
-               "<th>Ticket</th><th>Détail</th></tr></thead>";
+  function renderFinEcartDetail(fin) {
+    var panel = document.getElementById("fin-ecart-detail");
+    if (!finDetailLineKey || !fin) {
+      panel.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+    var line = fin.lines.filter(function (l) { return l.lineKey === finDetailLineKey; })[0];
+    if (!line) {
+      panel.classList.add("hidden");
+      return;
+    }
+    var contribs = CNS.getFinancialContributors(finDetailLineKey, activeAnomalies())
+      .sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
+    var sumContrib = CNS.sumFinancialContributions(finDetailLineKey, contribs);
+    var html = "<h4>🔍 Écart « " + escapeHtml(line.source) + " » : " +
+               (line.ecart > 0 ? "+" : "") + fmtDH(line.ecart) + "</h4>";
+    html += "<p class='muted'>Chaque ligne indique comment l'anomalie pousse l'écart " +
+            "(source − POS). <b>+</b> = la source encaisse plus que le POS · " +
+            "<b>−</b> = le POS a plus que la source.</p>";
+    if (!contribs.length) {
+      html += "<p>Aucune anomalie en attente explique cet écart (écart résidu ou déjà validé).</p>";
+    } else {
+      var sumSign = sumContrib > 0 ? "+" : "";
+      html += "<p><b>Total expliqué par les anomalies listées : " + sumSign +
+              fmtDH(sumContrib) + "</b></p>";
+      if (Math.abs(sumContrib - line.ecart) >= 1) {
+        html += "<p class='muted'>Le reste (" + fmtDH(line.ecart - sumContrib) +
+                ") peut venir de commandes sans anomalie individuelle (écarts de regroupement).</p>";
+      }
+      html += "<div class='table-wrap'><table class='fin-contrib-table'><thead><tr>" +
+              "<th>Valider</th><th>Gravité</th><th>Type</th><th>Impact écart</th>" +
+              "<th>Ticket</th><th>Détail</th></tr></thead><tbody>";
+      contribs.forEach(function (a) {
+        var impact = CNS.ecartContributionForAnomaly(a, finDetailLineKey);
+        var impSign = impact > 0 ? "+" : "";
+        html += "<tr><td><button type='button' class='btn-validate' data-id='" +
+                escapeHtml(a.id) + "'>✅</button></td>" +
+                "<td><span class='sev-badge sev-" + a.severity + "'>" +
+                SEV_BADGE[a.severity] + "</span></td>" +
+                "<td>" + escapeHtml(a.type) + "</td>" +
+                "<td class='st-anom'><b>" + impSign + fmtDH(impact) + "</b></td>" +
+                "<td>" + escapeHtml(fmtTicketLabel(a)) + "</td>" +
+                "<td>" + escapeHtml(a.detail) + "</td></tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    panel.innerHTML = html;
+    panel.classList.remove("hidden");
+    bindValidateButtons(panel);
+  }
+
+  function _tableHTML(rows, withValidate) {
+    var head = "<thead><tr>";
+    if (withValidate) head += "<th>Valider</th>";
+    head += "<th>Gravité</th><th>Source</th><th>Type</th>" +
+            "<th>Fichier</th><th>Ligne</th><th>Date/heure</th>" +
+            "<th>Ticket</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
-      return "<tr><td><span class='sev-badge sev-" + a.severity + "'>" +
+      var btn = withValidate ?
+        '<td><button type="button" class="btn-validate" data-id="' + escapeHtml(a.id) +
+        '" title="Valider — hors calcul">✅ Valider</button></td>' : "";
+      return "<tr>" + btn +
+             "<td><span class='sev-badge sev-" + a.severity + "'>" +
              SEV_BADGE[a.severity] + "</span></td><td>" + escapeHtml(a.source) +
              "</td><td>" + escapeHtml(a.type) + "</td><td>" + escapeHtml(a.file || "") +
              "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
              "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
-             escapeHtml(a.ticket_name) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+             escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
     return head + body;
   }
 
+  function bindValidateButtons(container) {
+    container.querySelectorAll(".btn-validate").forEach(function (btn) {
+      btn.onclick = function () {
+        validateAnomaly(btn.getAttribute("data-id"));
+      };
+    });
+  }
+
   function renderAnomalies() {
-    // Anomalies = Haute + Moyenne uniquement.
     var sev = checkedValues("fsev"), src = checkedValues("fsrc");
-    var rows = state.anomalies.filter(function (a) {
+    var rows = activeAnomalies().filter(function (a) {
       return a.severity !== "info" &&
              sev.indexOf(a.severity) !== -1 && src.indexOf(a.source) !== -1;
     }).sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
 
-    document.getElementById("anom-count").textContent = rows.length + " anomalie(s) affichée(s)";
-    document.getElementById("anom-table").innerHTML = rows.length ? _tableHTML(rows) :
-      "<tbody><tr><td>✅ Aucune anomalie pour ces filtres.</td></tr></tbody>";
+    document.getElementById("anom-count").textContent = rows.length + " anomalie(s) à traiter";
+    var table = document.getElementById("anom-table");
+    table.innerHTML = rows.length ? _tableHTML(rows, true) :
+      "<tbody><tr><td colspan='9'>✅ Aucune anomalie en attente pour ces filtres.</td></tr></tbody>";
+    if (rows.length) bindValidateButtons(table);
+  }
+
+  function renderValidated() {
+    var section = document.getElementById("validated-section");
+    var rows = validatedAnomalies().filter(function (a) { return a.severity !== "info"; })
+      .sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
+    if (!rows.length) {
+      section.classList.add("hidden");
+      return;
+    }
+    section.classList.remove("hidden");
+    document.getElementById("validated-count").textContent =
+      rows.length + " anomalie(s) validée(s) — exclues des calculs";
+    var head = "<thead><tr><th>Action</th><th>Gravité</th><th>Source</th><th>Type</th>" +
+               "<th>Ticket</th><th>Détail</th></tr></thead>";
+    var body = "<tbody>" + rows.map(function (a) {
+      return "<tr class='row-validated'><td><button type='button' class='btn-unvalidate' " +
+             "data-id='" + escapeHtml(a.id) + "' title='Annuler la validation'>↩ Annuler</button></td>" +
+             "<td><span class='sev-badge sev-" + a.severity + "'>" + SEV_BADGE[a.severity] +
+             "</span></td><td>" + escapeHtml(a.source) + "</td><td>" + escapeHtml(a.type) +
+             "</td><td>" + escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+    }).join("") + "</tbody>";
+    var table = document.getElementById("validated-table");
+    table.innerHTML = head + body;
+    table.querySelectorAll(".btn-unvalidate").forEach(function (btn) {
+      btn.onclick = function () { unvalidateAnomaly(btn.getAttribute("data-id")); };
+    });
   }
 
   function renderInfos() {
-    // Section Infos = éléments informatifs (rattachements, saisies tardives,
-    // tickets sans numéro, écarts globaux) — NON comptés comme anomalies.
     var src = checkedValues("fsrc");
-    var rows = state.anomalies.filter(function (a) {
+    var rows = activeAnomalies().filter(function (a) {
       return a.severity === "info" && src.indexOf(a.source) !== -1;
     });
     document.getElementById("infos-count").textContent = rows.length + " info(s) affichée(s)";
-    document.getElementById("infos-table").innerHTML = rows.length ? _tableHTML(rows) :
+    document.getElementById("infos-table").innerHTML = rows.length ? _tableHTML(rows, false) :
       "<tbody><tr><td>Aucune info pour ces filtres.</td></tr></tbody>";
   }
 
@@ -256,13 +464,13 @@
     document.getElementById("pos-table").innerHTML = head + body;
   }
 
-  // ---- Export Excel ------------------------------------------------------ //
   document.getElementById("download").addEventListener("click", function () {
     if (!state) return;
     var sm = state.summary;
+    var counts = recomputeCounts();
+    var fin = getAdjustedFinancial();
     var wb = XLSX.utils.book_new();
 
-    // Résumé
     var resume = [
       ["Indicateur", "Valeur"],
       ["Période analysée (POS)", (sm.pos_date_min || "") + " → " + (sm.pos_date_max || "")],
@@ -274,10 +482,11 @@
       ["Commandes Site (période)", sm.site_orders],
       ["Commandes Site hors période (ignorées)", sm.site_excluded || 0],
       ["", ""],
-      ["Anomalies (Haute + Moyenne)", sm.n_anomalies],
-      ["  dont haute", sm.severity.haute || 0],
-      ["  dont moyenne", sm.severity.moyenne || 0],
-      ["Infos (rattachements & notes)", sm.n_infos || 0],
+      ["Anomalies (Haute + Moyenne)", counts.n_anomalies],
+      ["  dont haute", counts.severity.haute || 0],
+      ["  dont moyenne", counts.severity.moyenne || 0],
+      ["Anomalies validées (hors calcul)", counts.n_validated || 0],
+      ["Infos (rattachements & notes)", counts.n_infos || 0],
       ["", ""],
     ];
     Object.keys(sm.channels).forEach(function (k) {
@@ -285,10 +494,12 @@
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resume), "Résumé");
 
-    // Réconciliation financière
-    var fin = sm.financial;
     if (fin) {
       var frows = [["Réconciliation financière (Écart = source − POS)"], []];
+      if (fin.adjustments_applied) {
+        frows.push(["(Anomalies validées exclues des montants ci-dessous)"]);
+        frows.push([]);
+      }
       frows.push(["Source", "Côté POS (libellé)", "Montant POS", "Côté source (libellé)", "Montant source", "Écart"]);
       fin.lines.forEach(function (l) {
         frows.push([l.source, l.pos_label, Math.round(l.pos), l.src_label, Math.round(l.src), Math.round(l.ecart)]);
@@ -307,12 +518,14 @@
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(frows), "Réconciliation €");
     }
 
-    function toRow(a) {
+    function toRow(a, validated) {
       return {
+        "Validée": validated ? "Oui" : "Non",
         "Gravité": SEV_BADGE[a.severity], "Source": a.source, "Type": a.type,
         "Fichier": a.file || "", "Ligne": a.row === "" ? "" : a.row,
         "Date/heure": a.when || "",
-        "Ticket POS": a.ticket_name, "Réf. source": a.source_ref,
+        "Ticket POS": a.ticket_name, "N° POS": a.pos_ticket_no || "",
+        "Réf. source": a.source_ref,
         "Montant POS": a.amount_pos, "Montant source": a.amount_source,
         "Paiement POS": a.payment_pos, "Paiement attendu": a.payment_source,
         "Détail": a.detail,
@@ -320,18 +533,19 @@
     }
     var byOrder = function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; };
 
-    // Anomalies (Haute + Moyenne)
     var anom = state.anomalies.filter(function (a) { return a.severity !== "info"; })
-                              .sort(byOrder).map(toRow);
+                              .sort(byOrder).map(function (a) {
+      return toRow(a, isValidated(a.id));
+    });
     if (!anom.length) anom = [{ "Gravité": "✅ Aucune anomalie", "Détail": "Tout est réconcilié." }];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anom), "Anomalies");
 
-    // Infos (rattachements & notes)
-    var infos = state.anomalies.filter(function (a) { return a.severity === "info"; }).map(toRow);
+    var infos = activeAnomalies().filter(function (a) { return a.severity === "info"; }).map(function (a) {
+      return toRow(a, false);
+    });
     if (!infos.length) infos = [{ "Gravité": "—", "Détail": "Aucune info." }];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(infos), "Infos");
 
-    // POS annoté
     var posRows = state.pos.map(function (p) {
       return {
         "Ticket No.": p.ticket_no, "Date": p.date, "Heure": p.hour, "Caissier": p.user,
@@ -346,7 +560,6 @@
     XLSX.writeFile(wb, "reconciliation_chicknster_" + stamp + ".xlsx");
   });
 
-  // ---- Utilitaires ------------------------------------------------------- //
   function checkedValues(cls) {
     return Array.prototype.slice.call(document.querySelectorAll("." + cls + ":checked"))
       .map(function (c) { return c.value; });
