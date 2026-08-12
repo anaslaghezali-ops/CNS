@@ -385,6 +385,17 @@ Analyse sur fichiers réels (non versionnés) — pour référence future :
 
 ---
 
+### 2026-08-12 — Site emporter : Bank Transfer interdit au POS
+
+**Demandé par** : gérant — col H « Delivery Method » (livraison / à emporter).
+
+**Règle** : commande site **à emporter** → POS doit être Cash ou Credit card, **pas** Bank Transfer
+(livraison site reste Bank Transfer).
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/loaders.py`, `reconciliation/reconcile.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

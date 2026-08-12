@@ -250,7 +250,7 @@ def load_site(source) -> pd.DataFrame:
     """
     Colonnes normalisées :
       identifiant, created_at, last_status, order_total,
-      delivery_status, payment_mode, payment_status
+      delivery_method, delivery_status, payment_mode, payment_status
     """
     header_row = _find_header_row(source, ["identifiant", "Order Total"])
     df = read_excel_safe(source, header=header_row)
@@ -261,6 +261,7 @@ def load_site(source) -> pd.DataFrame:
         "Last Status": "last_status",
         "Order Total": "order_total",
         "Order Value": "order_value",
+        "Delivery Method": "delivery_method",
         "Mode de paiement": "payment_mode",
         "Statut du paiement": "payment_status",
         "Delivery Provider Status": "delivery_status",
@@ -269,7 +270,8 @@ def load_site(source) -> pd.DataFrame:
 
     keep = [
         "identifiant", "created_at", "last_status", "order_total",
-        "order_value", "payment_mode", "payment_status", "delivery_status",
+        "order_value", "payment_mode", "payment_status", "delivery_method",
+        "delivery_status",
     ]
     df = df[[c for c in keep if c in df.columns]].copy()
 
@@ -279,6 +281,8 @@ def load_site(source) -> pd.DataFrame:
     df["order_total"] = pd.to_numeric(df["order_total"], errors="coerce")
     df["last_status"] = df["last_status"].apply(_clean_str)
     df["delivery_status"] = df["delivery_status"].apply(_clean_str)
+    if "delivery_method" in df.columns:
+        df["delivery_method"] = df["delivery_method"].apply(_clean_str)
 
     df = df.reset_index(drop=True)
     return df

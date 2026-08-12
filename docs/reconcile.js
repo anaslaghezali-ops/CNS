@@ -215,6 +215,7 @@
         created_at: toDate(r["Created At"]),
         last_status: s(r["Last Status"]),
         order_total: num(r["Order Total"]),
+        delivery_method: s(r["Delivery Method"]),
         delivery_status: s(r["Delivery Provider Status"]),
       });
     });
@@ -251,6 +252,64 @@
   // Fenêtre pour détecter une faute de frappe sur le numéro de commande site.
   var SITE_TYPO_WINDOW_MIN = 20;
   var SITE_TYPO_MAX_EDITS = 2;   // 1 chiffre en trop/en moins/modifié (voire 2)
+
+  function siteOrderIsTakeout(o) {
+    var m = s(o.delivery_method).toLowerCase().replace(/à/g, "a").replace(/é/g, "e");
+    return m.indexOf("emporter") >= 0;
+  }
+  function sitePaymentWarning(p, o) {
+    if (siteOrderIsTakeout(o)) {
+      if (p.payment_type === "Bank Transfer") {
+        return " ⚠️ Commande à emporter (col H) : « Bank Transfer » interdit au POS " +
+               "(Cash ou Credit card uniquement).";
+      }
+      if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
+        return " ⚠️ Commande à emporter : paiement '" + p.payment_type +
+               "' inattendu (Cash ou Credit card).";
+      }
+      return "";
+    }
+    if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
+      return " ⚠️ De plus, son paiement est '" + p.payment_type + "' au lieu de '" +
+             SITE_EXPECTED_PAYMENT + "'.";
+    }
+    return "";
+  }
+  function pushSitePaymentAnomalies(p, o, anomalies) {
+    if (siteOrderIsTakeout(o)) {
+      if (p.payment_type === "Bank Transfer") {
+        anomalies.push(posAnomaly(p, {
+          source: "Site", severity: "haute",
+          type: "Mode de paiement incorrect (commande à emporter)",
+          detail: "Commande site " + o.identifiant + " à emporter (col H « " +
+                  s(o.delivery_method) + " ») : « Bank Transfer » au POS est interdit — " +
+                  "seuls Cash ou Credit card sont possibles pour un emporter site.",
+          source_ref: o.identifiant,
+          payment_pos: p.payment_type,
+          payment_source: "Cash ou Credit card" }));
+      } else if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
+        anomalies.push(posAnomaly(p, {
+          source: "Site", severity: "haute",
+          type: "Mode de paiement incorrect (commande à emporter)",
+          detail: "Commande site " + o.identifiant + " à emporter : attendu Cash ou " +
+                  "Credit card, trouvé '" + p.payment_type + "' au POS.",
+          source_ref: o.identifiant,
+          payment_pos: p.payment_type,
+          payment_source: "Cash ou Credit card" }));
+      }
+      return;
+    }
+    if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
+      anomalies.push(posAnomaly(p, {
+        source: "Site", severity: "haute",
+        type: "Mode de paiement incorrect",
+        detail: "Commande site " + o.identifiant + " (livraison) : attendu '" +
+                SITE_EXPECTED_PAYMENT + "', trouvé '" + p.payment_type + "' au POS.",
+        source_ref: o.identifiant,
+        payment_pos: p.payment_type,
+        payment_source: SITE_EXPECTED_PAYMENT }));
+    }
+  }
 
   // Distance de Levenshtein (nb d'insertions/suppressions/substitutions).
   function editDistance(a, b) {
@@ -293,6 +352,7 @@
       var sid = o.identifiant;
       var delivered = (o.delivery_status || "").toUpperCase() === "DELIVERED";
       var p = byName[sid];
+      if (p) pushSitePaymentAnomalies(p, o, anomalies);
       if (delivered) {
         if (!p) { unmatchedDelivered.push(o); return; }
         if (!isNaN(p.total) && Math.abs(p.total - o.order_total) > AMOUNT_TOL) {
@@ -302,14 +362,6 @@
                     p.total + " DH (POS).",
             source_ref: sid,
             amount_pos: p.total, amount_source: o.order_total }));
-        }
-        if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
-          anomalies.push(posAnomaly(p, { source: "Site", severity: "haute",
-            type: "Mode de paiement incorrect",
-            detail: "Commande site " + sid + " : attendu '" + SITE_EXPECTED_PAYMENT +
-                    "', trouvé '" + p.payment_type + "' au POS.",
-            source_ref: sid,
-            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
         }
       }
       // Une commande non livrée (refusée/annulée) PEUT être présente au POS.
@@ -338,9 +390,7 @@
       var o = unmatchedDelivered[pr.oi], m = typoPool[pr.pi];
       m.channel = CH_SITE;
       typoUsed.add(m.ticket_no);
-      var payNote = m.payment_type !== SITE_EXPECTED_PAYMENT ?
-        " ⚠️ De plus, son paiement est '" + m.payment_type + "' au lieu de '" +
-        SITE_EXPECTED_PAYMENT + "'." : "";
+      var payNote = sitePaymentWarning(m, o);
       anomalies.push(posAnomaly(m, { source: "Site", severity: "moyenne",
         type: "Numéro de commande mal saisi (faute de frappe)",
         detail: "Commande site " + o.identifiant + " livrée : introuvable sous ce numéro, " +
@@ -350,7 +400,8 @@
                 " au lieu de " + o.identifiant + "." + payNote,
         source_ref: o.identifiant,
         amount_pos: m.total, amount_source: o.order_total,
-        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
+        payment_pos: m.payment_type,
+        payment_source: siteOrderIsTakeout(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT }));
     });
 
     unmatchedDelivered.forEach(function (o, oi) {

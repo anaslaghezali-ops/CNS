@@ -76,6 +76,60 @@ def _pos_ticket_kw(p):
 SITE_TYPO_WINDOW_MIN = 20  # fenêtre pour détecter une faute de frappe sur le n°
 
 
+def _site_order_is_takeout(site_row) -> bool:
+    m = str(site_row.get("delivery_method", "")).lower().replace("à", "a").replace("é", "e")
+    return "emporter" in m
+
+
+def _site_payment_warning(pos_row, site_row) -> str:
+    if _site_order_is_takeout(site_row):
+        if pos_row["payment_type"] == "Bank Transfer":
+            return (" ⚠️ Commande à emporter (col H) : « Bank Transfer » interdit au POS "
+                    "(Cash ou Credit card uniquement).")
+        if pos_row["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
+            return (f" ⚠️ Commande à emporter : paiement '{pos_row['payment_type']}' "
+                    f"inattendu (Cash ou Credit card).")
+        return ""
+    if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
+        return (f" ⚠️ De plus, son paiement est '{pos_row['payment_type']}' "
+                f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
+    return ""
+
+
+def _push_site_payment_anomalies(pos_row, site_row, anomalies):
+    sid = str(site_row["identifiant"])
+    if _site_order_is_takeout(site_row):
+        if pos_row["payment_type"] == "Bank Transfer":
+            anomalies.append(_anomaly(
+                "Site", "haute", "Mode de paiement incorrect (commande à emporter)",
+                f"Commande site {sid} à emporter (col H « {site_row.get('delivery_method', '')} ») : "
+                f"« Bank Transfer » au POS est interdit — seuls Cash ou Credit card sont "
+                f"possibles pour un emporter site.",
+                **{**_pos_ticket_kw(pos_row), "source_ref": sid,
+                   "payment_pos": pos_row["payment_type"],
+                   "payment_source": "Cash ou Credit card"},
+            ))
+        elif pos_row["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
+            anomalies.append(_anomaly(
+                "Site", "haute", "Mode de paiement incorrect (commande à emporter)",
+                f"Commande site {sid} à emporter : attendu Cash ou Credit card, "
+                f"trouvé '{pos_row['payment_type']}' au POS.",
+                **{**_pos_ticket_kw(pos_row), "source_ref": sid,
+                   "payment_pos": pos_row["payment_type"],
+                   "payment_source": "Cash ou Credit card"},
+            ))
+        return
+    if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
+        anomalies.append(_anomaly(
+            "Site", "haute", "Mode de paiement incorrect",
+            f"Commande site {sid} (livraison) : attendu '{SITE_EXPECTED_PAYMENT}', "
+            f"trouvé '{pos_row['payment_type']}' au POS.",
+            **{**_pos_ticket_kw(pos_row), "source_ref": sid,
+               "payment_pos": pos_row["payment_type"],
+               "payment_source": SITE_EXPECTED_PAYMENT},
+        ))
+
+
 def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
     """
     Rapproche le site par NUMÉRO (exact) et par faute de frappe (orphelin
@@ -94,6 +148,8 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
         sid = str(s["identifiant"])
         delivered = str(s.get("delivery_status", "")).upper() == "DELIVERED"
         pos_row = pos_by_name.get(sid)
+        if pos_row is not None:
+            _push_site_payment_anomalies(pos_row, s, anomalies)
         if delivered:
             if pos_row is None:
                 unmatched_delivered.append(s)
@@ -105,15 +161,6 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                     f"vs {pos_row['total']} DH (POS).",
                     **{**_pos_ticket_kw(pos_row), "source_ref": sid,
                        "amount_pos": pos_row["total"], "amount_source": s["order_total"]},
-                ))
-            if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
-                anomalies.append(_anomaly(
-                    "Site", "haute", "Mode de paiement incorrect",
-                    f"Commande site {sid} : attendu '{SITE_EXPECTED_PAYMENT}', "
-                    f"trouvé '{pos_row['payment_type']}' au POS.",
-                    **{**_pos_ticket_kw(pos_row), "source_ref": sid,
-                       "payment_pos": pos_row["payment_type"],
-                       "payment_source": SITE_EXPECTED_PAYMENT},
                 ))
         # Une commande non livrée (refusée/annulée) PEUT être présente au POS.
 
@@ -136,10 +183,7 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
         if best_row is not None:
             used_orphan.add(best_i)
             pos_df.loc[best_i, "channel_detected"] = CHANNEL_SITE
-            pay_note = ""
-            if best_row["payment_type"] != SITE_EXPECTED_PAYMENT:
-                pay_note = (f" ⚠️ De plus, son paiement est '{best_row['payment_type']}' "
-                            f"au lieu de '{SITE_EXPECTED_PAYMENT}'.")
+            pay_note = _site_payment_warning(best_row, s)
             anomalies.append(_anomaly(
                 "Site", "moyenne", "Numéro de commande mal saisi (faute de frappe)",
                 f"Commande site {sid} livrée : introuvable sous ce numéro, mais le ticket "
@@ -150,7 +194,8 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                 **{**_pos_ticket_kw(best_row), "source_ref": sid,
                    "amount_pos": best_row["total"], "amount_source": s["order_total"],
                    "payment_pos": best_row["payment_type"],
-                   "payment_source": SITE_EXPECTED_PAYMENT},
+                   "payment_source": ("Cash ou Credit card" if _site_order_is_takeout(s)
+                                    else SITE_EXPECTED_PAYMENT)},
             ))
         else:
             missing.append(s)  # -> passe commune, puis « absente »
