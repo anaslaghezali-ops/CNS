@@ -69,8 +69,17 @@
   function dtFull(d) {
     return d ? dateKey(d) + " " + hhmm(d) : "";
   }
+  function anomalyId(a) {
+    return [
+      a.source, a.type, a.ticket_name || "", a.source_ref || "",
+      a.amount_pos == null ? "" : a.amount_pos,
+      a.amount_source == null ? "" : a.amount_source,
+      a.payment_pos || "", a.payment_source || "",
+      a.file || "", a.row == null ? "" : a.row,
+    ].join("|");
+  }
   function anomaly(o) {
-    return {
+    var a = {
       source: o.source, severity: o.severity, type: o.type,
       ticket_name: o.ticket_name || "", pos_datetime: o.pos_datetime || null,
       source_ref: o.source_ref || "", detail: o.detail,
@@ -80,6 +89,8 @@
       file: o.file || "", row: o.row == null ? "" : o.row,
       when: o.when || (o.pos_datetime ? dtFull(o.pos_datetime) : ""),
     };
+    a.id = anomalyId(a);
+    return a;
   }
 
   // ----------------------------------------------------------------------- //
@@ -904,6 +915,97 @@
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines };
   }
 
+  // Ajustements financiers pour anomalies validées (hors calcul d'écart).
+  // Voir CURSOR_JOURNAL.md — chaque type retire le montant du côté qui crée l'écart.
+  function emptyAdj() {
+    return {
+      glovo_pos_bt: 0, glovo_pos_cash: 0,
+      glovo_src_online: 0, glovo_src_cash: 0,
+      site_pos: 0, site_src: 0,
+      pos_cc: 0, naps_src: 0,
+    };
+  }
+  function financialAdjustment(a) {
+    var adj = emptyAdj();
+    var t = a.type;
+    var ap = a.amount_pos, as = a.amount_source;
+    if (ap == null || isNaN(ap)) ap = 0;
+    if (as == null || isNaN(as)) as = 0;
+
+    if (t === "Commande livrée absente du POS") {
+      adj.site_src -= as;
+    } else if (t === "Commande Glovo absente du POS") {
+      if (a.payment_source === "Cash") adj.glovo_src_cash -= as;
+      else adj.glovo_src_online -= as;
+    } else if (t === "Ticket Glovo au POS sans commande correspondante") {
+      if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;
+      else adj.glovo_pos_bt -= ap;
+    } else if (t === "Ticket Site au POS sans commande correspondante") {
+      adj.site_pos -= ap;
+    } else if (t === "Paiement POS absent du TPE") {
+      adj.pos_cc -= ap;
+    } else if (t === "Transaction TPE absente du POS") {
+      adj.naps_src -= as;
+    } else if (t === "Écart de montant" && a.source === "Site") {
+      adj.site_src -= as;
+      adj.site_pos -= ap;
+    } else if (t === "Ticket en double (correction)") {
+      if (a.source === "Glovo") {
+        if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;
+        else adj.glovo_pos_bt -= ap;
+      } else if (a.source === "Site") {
+        adj.site_pos -= ap;
+      }
+    } else if (t === "Mode de paiement incorrect" && a.source === "Glovo" && ap) {
+      var exp = a.payment_source, got = a.payment_pos;
+      if (exp === "Bank Transfer" && got === "Cash") {
+        adj.glovo_pos_cash -= ap;
+        adj.glovo_pos_bt += ap;
+      } else if (exp === "Cash" && got === "Bank Transfer") {
+        adj.glovo_pos_bt -= ap;
+        adj.glovo_pos_cash += ap;
+      }
+    }
+    return adj;
+  }
+  function sumFinancialAdjustments(anomalies) {
+    var tot = emptyAdj();
+    anomalies.forEach(function (a) {
+      var x = financialAdjustment(a);
+      Object.keys(tot).forEach(function (k) { tot[k] += x[k]; });
+    });
+    return tot;
+  }
+  function applyFinancialAdjustments(fin, adj) {
+    if (!fin || !adj) return fin;
+    var lines = fin.lines.map(function (l) {
+      var pos = l.pos, src = l.src;
+      if (l.source === "🛵 Glovo — Online") {
+        pos += adj.glovo_pos_bt;
+        src += adj.glovo_src_online;
+      } else if (l.source === "🛵 Glovo — Cash") {
+        pos += adj.glovo_pos_cash;
+        src += adj.glovo_src_cash;
+      } else if (l.source === "🛵 Glovo — Total") {
+        pos += adj.glovo_pos_bt + adj.glovo_pos_cash;
+        src += adj.glovo_src_online + adj.glovo_src_cash;
+      } else if (l.source === "🌐 Site") {
+        pos += adj.site_pos;
+        src += adj.site_src;
+      } else if (l.source.indexOf("NAPS") >= 0) {
+        pos += adj.pos_cc;
+        src += adj.naps_src;
+      }
+      return {
+        source: l.source, pos_label: l.pos_label, src_label: l.src_label,
+        pos: pos, src: src, ecart: src - pos,
+        group: l.group, isTotal: l.isTotal, note: l.note,
+      };
+    });
+    return { pays: fin.pays, by_payment: fin.by_payment, matrix: fin.matrix,
+             lines: lines, adjustments_applied: true };
+  }
+
   function annotate(pos, anomalies) {
     var byTicket = {}, sevTicket = {};
     anomalies.forEach(function (a) {
@@ -946,6 +1048,8 @@
   var CNS = {
     loadPOS: loadPOS, loadGlovo: loadGlovo, loadNAPS: loadNAPS, loadSite: loadSite,
     classify: classify, run: run,
+    sumFinancialAdjustments: sumFinancialAdjustments,
+    applyFinancialAdjustments: applyFinancialAdjustments,
     CH: { GLOVO: CH_GLOVO, SITE: CH_SITE, DINEIN: CH_DINEIN,
           UNASSIGNED: CH_UNASSIGNED, OTHER: CH_OTHER },
   };

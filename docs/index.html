@@ -69,7 +69,7 @@
 
       <hr />
       <h2>🚨 Anomalies</h2>
-      <p class="muted">Éléments à corriger (Haute + Moyenne). Les rattachements et notes sont dans la section « Infos » plus bas.</p>
+      <p class="muted">Éléments à corriger (Haute + Moyenne). Clique sur <b>✅ Valider</b> une fois traité : l'anomalie sort des calculs (vue d'ensemble + réconciliation financière). Les rattachements et notes sont dans « Infos ».</p>
       <div class="filters">
         <div>
           <span class="filter-label">Gravité :</span>
@@ -82,6 +82,13 @@
       </div>
       <div id="anom-count" class="muted"></div>
       <div class="table-wrap"><table id="anom-table"></table></div>
+
+      <section id="validated-section" class="hidden validated-block">
+        <h3>✅ Anomalies validées</h3>
+        <p class="muted">Exclues des compteurs et de la réconciliation financière. <b>↩ Annuler</b> pour les réintégrer.</p>
+        <div id="validated-count" class="muted"></div>
+        <div class="table-wrap"><table id="validated-table"></table></div>
+      </section>
 
       <hr />
       <h2>🔵 Infos <span class="muted" style="font-size:.9rem;font-weight:400">(rattachements & notes — pas des anomalies)</span></h2>
