@@ -427,6 +427,25 @@ ou une similarité produits qui échouait (format Glovo `Order Items` avec croch
 
 ---
 
+### 2026-08-12 — Réconciliation par journée (onglets + export Excel)
+
+**Demandé par** : gérant — analyser jour par jour (ex. fichiers du 5 au 10 août = 6 journées)
+tout en gardant le récapitulatif général.
+
+**Fonctionnement** :
+- Après réconciliation, onglets **📊 Général** + **📅 &lt;date&gt;** pour chaque journée POS détectée
+  (affichés seulement s’il y a **plus d’une** journée).
+- Vue journée = même contenu que le général (métriques, réconciliation financière, anomalies,
+  infos, POS annoté) mais POS filtré sur la date ; Glovo / Site / NAPS alignés sur cette journée.
+- Validation d’anomalies : état global partagé (`state.validated`) — un ID validé en vue jour
+  est validé partout.
+- Export Excel : feuilles globales + par jour (`05/08 Résumé`, `05/08 Réconcil`, `05/08 Anomalies`, etc.).
+
+**Fichiers** : `docs/reconcile.js` (`runDailyBreakdown`, `listPosDates`), `docs/app.js`,
+`docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
