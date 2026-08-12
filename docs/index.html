@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ChickNSter — Réconciliation</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐔</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="hero">
+    <h1>🐔 ChickNSter — Réconciliation</h1>
+    <p>POS · Glovo · NAPS (TPE) · Site</p>
+  </header>
+
+  <main>
+    <details class="help">
+      <summary>ℹ️ Comment ça marche ?</summary>
+      <ol>
+        <li><b>Dépose les 4 fichiers Excel</b> ci-dessous (le POS est obligatoire ; les 3 sources sont facultatives).</li>
+        <li>Clique sur <b>Lancer la réconciliation</b>.</li>
+        <li>Consulte les écarts, puis <b>télécharge le rapport Excel</b>.</li>
+      </ol>
+      <p class="muted">Tout se passe dans ton navigateur : <b>aucun fichier n'est envoyé sur Internet</b>.</p>
+    </details>
+
+    <h2>📂 Fichiers</h2>
+    <div class="uploads">
+      <label class="drop" data-key="pos">
+        <span class="drop-title">POS (Mahaal) <b class="req">obligatoire</b></span>
+        <input type="file" accept=".xlsx,.xls" />
+        <span class="drop-state">Aucun fichier</span>
+      </label>
+      <label class="drop" data-key="glovo">
+        <span class="drop-title">Glovo</span>
+        <input type="file" accept=".xlsx,.xls" />
+        <span class="drop-state">Aucun fichier</span>
+      </label>
+      <label class="drop" data-key="naps">
+        <span class="drop-title">NAPS (TPE)</span>
+        <input type="file" accept=".xlsx,.xls" />
+        <span class="drop-state">Aucun fichier</span>
+      </label>
+      <label class="drop" data-key="site">
+        <span class="drop-title">Site</span>
+        <input type="file" accept=".xlsx,.xls" />
+        <span class="drop-state">Aucun fichier</span>
+      </label>
+    </div>
+
+    <button id="run" class="btn-primary">🚀 Lancer la réconciliation</button>
+    <div id="message" class="message"></div>
+
+    <section id="results" class="hidden">
+      <hr />
+      <h2>📊 Vue d'ensemble</h2>
+      <div class="metrics" id="metrics"></div>
+      <div class="chart" id="chart"></div>
+
+      <button id="download" class="btn-primary">⬇️ Télécharger le rapport Excel</button>
+
+      <hr />
+      <h2>🚨 Anomalies</h2>
+      <div class="filters">
+        <div>
+          <span class="filter-label">Gravité :</span>
+          <label><input type="checkbox" class="fsev" value="haute" checked /> 🔴 Haute</label>
+          <label><input type="checkbox" class="fsev" value="moyenne" checked /> 🟠 Moyenne</label>
+          <label><input type="checkbox" class="fsev" value="info" checked /> 🔵 Info</label>
+        </div>
+        <div id="fsrc-wrap">
+          <span class="filter-label">Source :</span>
+        </div>
+      </div>
+      <div id="anom-count" class="muted"></div>
+      <div class="table-wrap"><table id="anom-table"></table></div>
+
+      <hr />
+      <h2>🧾 POS annoté</h2>
+      <label class="only-anom"><input type="checkbox" id="only-anom" /> N'afficher que les tickets en anomalie</label>
+      <div class="table-wrap"><table id="pos-table"></table></div>
+    </section>
+  </main>
+
+  <footer>
+    <p class="muted">ChickNSter — réconciliation locale, 100 % dans le navigateur.</p>
+  </footer>
+
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="reconcile.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

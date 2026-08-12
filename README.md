@@ -5,6 +5,25 @@ on dépose les 4 fichiers Excel d'une journée et le système vérifie que
 **tout ce qui est encaissé correspond bien aux commandes**, avec les bons
 montants et les bons modes de paiement.
 
+## 🌐 Version en ligne (sans installation)
+
+Le dossier [`docs/`](docs/) contient une version **100 % navigateur** : rien
+à installer, tout le calcul se fait sur ta machine (aucun fichier n'est
+envoyé sur Internet). Une fois GitHub Pages activé (voir plus bas), elle est
+accessible à :
+
+**https://anaslaghezali-ops.github.io/CNS/**
+
+### Activer GitHub Pages (une seule fois)
+
+1. Sur GitHub, ouvre le dépôt → onglet **Settings**.
+2. Menu de gauche → **Pages**.
+3. Section **Build and deployment** → **Source** → choisis **GitHub Actions**.
+4. C'est tout : le site se déploie automatiquement (et se met à jour à chaque
+   nouveau commit sur la branche).
+
+---
+
 ## Les 4 sources
 
 | Fichier | Rôle | Clé de rapprochement avec le POS |
