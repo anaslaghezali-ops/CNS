@@ -110,5 +110,19 @@ tbody tr:hover { background: #fbfbfb; }
 .validated-block h3 { margin: 0 0 8px; font-size: 1rem; }
 .row-validated td { background: #f8fcf9; }
 .fin-adj-note { margin-bottom: 10px; padding: 8px 12px; background: #f0faf5; border-radius: 6px; }
+.fin-ecart-detail {
+  margin: 12px 0 18px; padding: 14px 16px; background: #fff8f0;
+  border: 1px solid #e8d4b8; border-radius: 8px;
+}
+.fin-ecart-detail.hidden { display: none; }
+.fin-ecart-detail h4 { margin: 0 0 10px; font-size: .95rem; }
+.btn-fin-detail {
+  font-size: .78rem; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  border: 1px solid #d4a574; background: #fff; color: #8b5a2b;
+}
+.btn-fin-detail:hover { background: #fff3e6; }
+.btn-fin-detail.active { background: #fff3e6; border-color: #8b5a2b; font-weight: 600; }
+.fin-contrib-table { font-size: .84rem; margin-top: 8px; }
+.fin-contrib-table th { background: #8b5a2b; }
 
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }

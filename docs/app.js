@@ -7,6 +7,7 @@
 
   var SEV_BADGE = { haute: "🔴 Haute", moyenne: "🟠 Moyenne", info: "🔵 Info" };
   var SEV_ORDER = { haute: 0, moyenne: 1, info: 2 };
+  var finDetailLineKey = null;
 
   // ---- Sélection de fichiers -------------------------------------------- //
   document.querySelectorAll(".drop").forEach(function (drop) {
@@ -67,6 +68,7 @@
         var site = sheets[3] ? CNS.loadSite(sheets[3]) : null;
         state = CNS.run(pos, glovo, naps, site);
         state.validated = {};
+        finDetailLineKey = null;
         render();
       } catch (err) {
         setMessage('<div class="err">❌ Erreur : ' + escapeHtml(err.message) + "</div>");
@@ -220,12 +222,14 @@
   }
 
   function renderFinancial(fin) {
-    if (!fin) { document.getElementById("fin-lines").innerHTML = ""; return; }
-    var adjNote = fin.adjustments_applied ?
-      "<p class='muted fin-adj-note'>Montants ajustés : les anomalies <b>validées</b> ne sont plus comptées dans les écarts.</p>" : "";
+    if (!fin) {
+      document.getElementById("fin-lines").innerHTML = "";
+      document.getElementById("fin-ecart-detail").classList.add("hidden");
+      return;
+    }
     var prev = document.getElementById("fin-adj-note");
     if (prev) prev.remove();
-    if (adjNote) {
+    if (fin.adjustments_applied) {
       var el = document.createElement("p");
       el.id = "fin-adj-note";
       el.className = "muted fin-adj-note";
@@ -233,18 +237,38 @@
       document.getElementById("fin-lines").parentNode.insertBefore(el, document.getElementById("fin-lines"));
     }
     var head = "<thead><tr><th>Source</th><th>Côté POS</th><th>Côté source</th>" +
-               "<th>Écart (source − POS)</th></tr></thead>";
+               "<th>Écart (source − POS)</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + fin.lines.map(function (l) {
       var cls = Math.abs(l.ecart) < 0.5 ? "st-ok" : "st-anom";
       var sign = l.ecart > 0 ? "+" : "";
       var note = l.note ? "<div class='muted' style='font-size:.82rem'>" + escapeHtml(l.note) + "</div>" : "";
       var rowCls = l.isTotal ? "fin-total" : (l.group === "glovo" ? "fin-glovo-sub" : "");
+      var contribs = l.lineKey ? CNS.getFinancialContributors(l.lineKey, activeAnomalies()) : [];
+      var detailCell = "";
+      if (l.lineKey) {
+        var active = finDetailLineKey === l.lineKey;
+        detailCell = "<button type='button' class='btn-fin-detail" +
+          (active ? " active" : "") + "' data-line-key='" + escapeHtml(l.lineKey) +
+          "' data-line-label='" + escapeHtml(l.source) + "'>🔍 Voir l'écart (" +
+          contribs.length + ")</button>";
+      }
       return "<tr class='" + rowCls + "'><td><b>" + escapeHtml(l.source) + "</b></td>" +
              "<td>" + escapeHtml(l.pos_label) + " : <b>" + fmtDH(l.pos) + "</b></td>" +
              "<td>" + escapeHtml(l.src_label) + " : <b>" + fmtDH(l.src) + "</b>" + note + "</td>" +
-             "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td></tr>";
+             "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td>" +
+             "<td>" + detailCell + "</td></tr>";
     }).join("") + "</tbody>";
-    document.getElementById("fin-lines").innerHTML = head + body;
+    var table = document.getElementById("fin-lines");
+    table.innerHTML = head + body;
+    table.querySelectorAll(".btn-fin-detail").forEach(function (btn) {
+      btn.onclick = function () {
+        var key = btn.getAttribute("data-line-key");
+        finDetailLineKey = finDetailLineKey === key ? null : key;
+        renderFinEcartDetail(fin);
+        renderFinancial(fin);
+      };
+    });
+    renderFinEcartDetail(fin);
 
     var pays = fin.pays;
     var chans = Object.keys(fin.matrix);
@@ -265,6 +289,58 @@
       return "<td><b>" + fmtDH(colTot[p]) + "</b></td>"; }).join("") +
       "<td><b>" + fmtDH(grand) + "</b></td></tr></tbody>";
     document.getElementById("fin-matrix").innerHTML = mhead + mbody;
+  }
+
+  function renderFinEcartDetail(fin) {
+    var panel = document.getElementById("fin-ecart-detail");
+    if (!finDetailLineKey || !fin) {
+      panel.classList.add("hidden");
+      panel.innerHTML = "";
+      return;
+    }
+    var line = fin.lines.filter(function (l) { return l.lineKey === finDetailLineKey; })[0];
+    if (!line) {
+      panel.classList.add("hidden");
+      return;
+    }
+    var contribs = CNS.getFinancialContributors(finDetailLineKey, activeAnomalies())
+      .sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
+    var sumContrib = CNS.sumFinancialContributions(finDetailLineKey, contribs);
+    var html = "<h4>🔍 Écart « " + escapeHtml(line.source) + " » : " +
+               (line.ecart > 0 ? "+" : "") + fmtDH(line.ecart) + "</h4>";
+    html += "<p class='muted'>Chaque ligne indique comment l'anomalie pousse l'écart " +
+            "(source − POS). <b>+</b> = la source encaisse plus que le POS · " +
+            "<b>−</b> = le POS a plus que la source.</p>";
+    if (!contribs.length) {
+      html += "<p>Aucune anomalie en attente explique cet écart (écart résidu ou déjà validé).</p>";
+    } else {
+      var sumSign = sumContrib > 0 ? "+" : "";
+      html += "<p><b>Total expliqué par les anomalies listées : " + sumSign +
+              fmtDH(sumContrib) + "</b></p>";
+      if (Math.abs(sumContrib - line.ecart) >= 1) {
+        html += "<p class='muted'>Le reste (" + fmtDH(line.ecart - sumContrib) +
+                ") peut venir de commandes sans anomalie individuelle (écarts de regroupement).</p>";
+      }
+      html += "<div class='table-wrap'><table class='fin-contrib-table'><thead><tr>" +
+              "<th>Valider</th><th>Gravité</th><th>Type</th><th>Impact écart</th>" +
+              "<th>Ticket</th><th>Détail</th></tr></thead><tbody>";
+      contribs.forEach(function (a) {
+        var impact = CNS.ecartContributionForAnomaly(a, finDetailLineKey);
+        var impSign = impact > 0 ? "+" : "";
+        html += "<tr><td><button type='button' class='btn-validate' data-id='" +
+                escapeHtml(a.id) + "'>✅</button></td>" +
+                "<td><span class='sev-badge sev-" + a.severity + "'>" +
+                SEV_BADGE[a.severity] + "</span></td>" +
+                "<td>" + escapeHtml(a.type) + "</td>" +
+                "<td class='st-anom'><b>" + impSign + fmtDH(impact) + "</b></td>" +
+                "<td>" + escapeHtml(a.ticket_name) + "</td>" +
+                "<td>" + escapeHtml(a.detail) + "</td></tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    panel.innerHTML = html;
+    panel.classList.remove("hidden");
+    bindValidateButtons(panel);
   }
 
   function _tableHTML(rows, withValidate) {

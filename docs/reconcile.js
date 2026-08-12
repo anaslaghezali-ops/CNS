@@ -885,32 +885,39 @@
       .forEach(function (o) { if (!isNaN(o.order_total)) siteL += o.order_total; });
 
     var lines = [];
-    if (naps) lines.push({ source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
-      pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC });
+    if (naps) lines.push({
+      lineKey: "naps", source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
+      pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC,
+    });
     if (glovo) {
       var posGlovoBT = sumPosGlovoPay("Bank Transfer");
       var posGlovoCash = sumPosGlovoPay("Cash");
       var glovoOnline = sumGlovoDelivered("Online");
       var glovoCash = sumGlovoDelivered("Cash");
       lines.push({
-        source: "🛵 Glovo — Online", pos_label: "POS Glovo « Bank Transfer »",
+        lineKey: "glovo_online", source: "🛵 Glovo — Online",
+        pos_label: "POS Glovo « Bank Transfer »",
         pos: posGlovoBT, src_label: "Glovo Online (W − AE)", src: glovoOnline,
         ecart: glovoOnline - posGlovoBT, group: "glovo",
       });
       lines.push({
-        source: "🛵 Glovo — Cash", pos_label: "POS Glovo « Cash »",
+        lineKey: "glovo_cash", source: "🛵 Glovo — Cash",
+        pos_label: "POS Glovo « Cash »",
         pos: posGlovoCash, src_label: "Glovo Cash (W − AE)", src: glovoCash,
         ecart: glovoCash - posGlovoCash, group: "glovo",
       });
       lines.push({
-        source: "🛵 Glovo — Total", pos_label: "POS tickets Glovo (tous paiements)",
+        lineKey: "glovo_total", source: "🛵 Glovo — Total",
+        pos_label: "POS tickets Glovo (tous paiements)",
         pos: posGlovo, src_label: "Glovo livrées (W − AE)", src: glovoW,
         ecart: glovoW - posGlovo, group: "glovo", isTotal: true,
         note: "Écart total = Online + Cash (voir lignes ci-dessus pour le détail).",
       });
     }
-    if (site) lines.push({ source: "🌐 Site", pos_label: "POS tickets Site",
-      pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite });
+    if (site) lines.push({
+      lineKey: "site", source: "🌐 Site", pos_label: "POS tickets Site",
+      pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite,
+    });
 
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines };
   }
@@ -968,6 +975,30 @@
     }
     return adj;
   }
+  function ecartDeltaForAdjustment(adj, lineKey) {
+    if (lineKey === "glovo_online") return adj.glovo_src_online - adj.glovo_pos_bt;
+    if (lineKey === "glovo_cash") return adj.glovo_src_cash - adj.glovo_pos_cash;
+    if (lineKey === "glovo_total") {
+      return (adj.glovo_src_online + adj.glovo_src_cash) -
+             (adj.glovo_pos_bt + adj.glovo_pos_cash);
+    }
+    if (lineKey === "site") return adj.site_src - adj.site_pos;
+    if (lineKey === "naps") return adj.naps_src - adj.pos_cc;
+    return 0;
+  }
+  function ecartContributionForAnomaly(a, lineKey) {
+    return -ecartDeltaForAdjustment(financialAdjustment(a), lineKey);
+  }
+  function getFinancialContributors(lineKey, anomalies) {
+    return anomalies.filter(function (a) {
+      return Math.abs(ecartContributionForAnomaly(a, lineKey)) >= 0.01;
+    });
+  }
+  function sumFinancialContributions(lineKey, anomalies) {
+    var s = 0;
+    anomalies.forEach(function (a) { s += ecartContributionForAnomaly(a, lineKey); });
+    return s;
+  }
   function sumFinancialAdjustments(anomalies) {
     var tot = emptyAdj();
     anomalies.forEach(function (a) {
@@ -980,24 +1011,24 @@
     if (!fin || !adj) return fin;
     var lines = fin.lines.map(function (l) {
       var pos = l.pos, src = l.src;
-      if (l.source === "🛵 Glovo — Online") {
+      if (l.lineKey === "glovo_online") {
         pos += adj.glovo_pos_bt;
         src += adj.glovo_src_online;
-      } else if (l.source === "🛵 Glovo — Cash") {
+      } else if (l.lineKey === "glovo_cash") {
         pos += adj.glovo_pos_cash;
         src += adj.glovo_src_cash;
-      } else if (l.source === "🛵 Glovo — Total") {
+      } else if (l.lineKey === "glovo_total") {
         pos += adj.glovo_pos_bt + adj.glovo_pos_cash;
         src += adj.glovo_src_online + adj.glovo_src_cash;
-      } else if (l.source === "🌐 Site") {
+      } else if (l.lineKey === "site") {
         pos += adj.site_pos;
         src += adj.site_src;
-      } else if (l.source.indexOf("NAPS") >= 0) {
+      } else if (l.lineKey === "naps") {
         pos += adj.pos_cc;
         src += adj.naps_src;
       }
       return {
-        source: l.source, pos_label: l.pos_label, src_label: l.src_label,
+        lineKey: l.lineKey, source: l.source, pos_label: l.pos_label, src_label: l.src_label,
         pos: pos, src: src, ecart: src - pos,
         group: l.group, isTotal: l.isTotal, note: l.note,
       };
@@ -1050,6 +1081,9 @@
     classify: classify, run: run,
     sumFinancialAdjustments: sumFinancialAdjustments,
     applyFinancialAdjustments: applyFinancialAdjustments,
+    getFinancialContributors: getFinancialContributors,
+    ecartContributionForAnomaly: ecartContributionForAnomaly,
+    sumFinancialContributions: sumFinancialContributions,
     CH: { GLOVO: CH_GLOVO, SITE: CH_SITE, DINEIN: CH_DINEIN,
           UNASSIGNED: CH_UNASSIGNED, OTHER: CH_OTHER },
   };
