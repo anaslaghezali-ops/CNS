@@ -50,6 +50,9 @@ def _is_all_dinein_payments(raw: str) -> bool:
 # réception (possiblement à la minute exacte) et 10 min après au maximum.
 GLOVO_WINDOW_BEFORE_MIN = 1    # simple tolérance d'arrondi à la minute
 GLOVO_WINDOW_AFTER_MIN = 20    # maximum observé entre réception et saisie POS
+# Règle métier : une commande reçue est tapée au POS dans l'heure. Au-delà, ce
+# n'est plus la même commande (ni rapprochement, ni suggestion).
+MAX_LATE_ENTRY_MIN = 60
 
 AMOUNT_TOLERANCE = 0.5  # écart de montant toléré (arrondis)
 
@@ -356,7 +359,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
 
     before = pd.Timedelta(minutes=GLOVO_WINDOW_BEFORE_MIN)
     after = pd.Timedelta(minutes=GLOVO_WINDOW_AFTER_MIN)
-    wide = pd.Timedelta(minutes=120)
+    wide = pd.Timedelta(minutes=MAX_LATE_ENTRY_MIN)
     used = set()
 
     remaining = []

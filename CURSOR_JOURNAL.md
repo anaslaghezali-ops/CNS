@@ -741,6 +741,32 @@ Cash≠Cash · message explicite (mauvais SP/EMP, etc.) + détail appariements m
 
 ---
 
+### 2026-08-12 — Saisie POS dans l'heure + n° Glovo mal saisi (correctif)
+
+**Demandé par** : gérant — commande 101718699078 (Online 190 DH, 21:55) restait
+« absente du POS » avec une suggestion à **23:09** (+74 min), alors qu'elle correspond
+au ticket **Sp235** tapé à **21:56** pour exactement 190 DH.
+
+**Règles** :
+1. `MAX_LATE_ENTRY_MIN = 60` — impossible de taper une commande Glovo/Site plus d'une
+   heure après réception : plus de rapprochement (saisie tardive, annulée, doublon)
+   ni de **suggestion** au-delà de 60 min (avant : 120 min).
+2. Phase **2b** avant les phases tardives / écart de montant : commande livrée non
+   appariée + ticket **SP/EMP ou libre** au **même montant** et **même mode de paiement**
+   dans l'heure ⇒ anomalie **haute** « Numéro Glovo mal saisi au POS », ticket reclassé
+   **Glovo** (2 passes : 20 min puis 60 min). Les tickets « à rattacher » restent à la
+   passe commune Glovo+Site.
+3. `AMOUNT_MISMATCH_MAX_RATIO = 0.3` — un « Écart de montant » n'est retenu que si le
+   POS est proche du montant réel (ou = subtotal brut W) ; sinon la commande reste
+   « absente du POS » au lieu d'être appariée à tort.
+
+**Effet** : le ticket compte désormais en **Glovo Bank Transfer** (et non SP&EMP) →
+l'écart financier Glovo Online de 190 DH et l'écart de nombre 48/47 se résorbent.
+
+**Fichiers** : `docs/reconcile.js`, `docs/index.html`, `reconciliation/reconcile.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

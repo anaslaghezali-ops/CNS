@@ -98,6 +98,13 @@
 
   var WINDOW_BEFORE_MIN = 1;
   var WINDOW_AFTER_MIN = 20;
+  /**
+   * Règle métier : une commande Glovo/Site reçue est tapée au POS dans l'heure.
+   * Au-delà, ce n'est plus la même commande — pas de rapprochement ni de suggestion.
+   */
+  var MAX_LATE_ENTRY_MIN = 60;
+  /** Écart de saisie plausible sur un même ticket (au-delà : ce n'est pas la même commande). */
+  var AMOUNT_MISMATCH_MAX_RATIO = 0.3;
   var AMOUNT_TOL = 0.5;
   /** Journée caisse POS : de 03:00 à 02:59 le lendemain (pas minuit–minuit). */
   var POS_BUSINESS_DAY_START_HOUR = 3;
@@ -853,55 +860,59 @@
         payment_pos: p.payment_type, payment_source: exp }));
     });
 
-    // Phase 2b : Glovo tapé sous SP/EMP ou libre (bon paiement + montant + fenêtre proche).
-    // Avant saisie tardive / écart montant — ex. Online 190 DH à 21:55 tapée « Sp235 ».
+    // Phase 2b : commande tapée sous un nom de ticket hors canal Glovo (SP/EMP, libre).
+    // Toute commande livrée DOIT avoir un ticket POS : même montant + même mode de
+    // paiement + tapée dans l'heure => c'est un numéro de ticket mal saisi.
+    // Les tickets « à rattacher » (sans numéro) restent à la passe commune Glovo+Site.
     var wrongNameUsed = new Set();
-    var wrongPairs = [];
-    delivered.forEach(function (g, gi) {
-      if (matched.has(gi) || !g.received_at) return;
-      var exp = GLOVO_PAYMENT_MAP[g.payment_type];
-      pos.forEach(function (p) {
-        if (p.channel === CH_GLOVO || p.channel === CH_SITE) return;
-        if (p.matched_glovo_order) return;
-        if (wrongNameUsed.has(p.ticket_no)) return;
-        if (p.payment_type !== exp) return;
-        if (!amountMatch(g, p)) return;
-        if (!inWindow(g, p, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN)) return;
-        var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
-        wrongPairs.push({ gi: gi, p: p, gap: gap, exp: exp });
+    function assignWrongTicketName(beforeMin, afterMin) {
+      var pairs = [];
+      delivered.forEach(function (g, gi) {
+        if (matched.has(gi) || !g.received_at) return;
+        var exp = GLOVO_PAYMENT_MAP[g.payment_type];
+        pos.forEach(function (p) {
+          if (p.channel !== CH_DINEIN && p.channel !== CH_OTHER) return;
+          if (p.matched_glovo_order || wrongNameUsed.has(p.ticket_no)) return;
+          if (p.payment_type !== exp) return;
+          if (!amountMatch(g, p)) return;
+          if (!inWindow(g, p, beforeMin, afterMin)) return;
+          pairs.push({ gi: gi, p: p, exp: exp,
+                       gap: Math.abs(minutesBetween(p.datetime, g.received_at)) });
+        });
       });
-    });
-    wrongPairs.sort(function (a, b) { return a.gap - b.gap; });
-    var wrongMatchedG = new Set();
-    wrongPairs.forEach(function (pr) {
-      if (wrongMatchedG.has(pr.gi) || wrongNameUsed.has(pr.p.ticket_no)) return;
-      wrongMatchedG.add(pr.gi);
-      wrongNameUsed.add(pr.p.ticket_no);
-      matched.add(pr.gi);
-      var g = delivered[pr.gi], p = pr.p, exp = pr.exp;
-      markGlovoPosMatch(g, p);
-      p.channel = CH_GLOVO;
-      p.channel_match = "glovo_wrong_name";
-      anomalies.push(posAnomaly(p, {
-        source: "Glovo", severity: "moyenne",
-        type: "Numéro Glovo mal saisi (SP/EMP ou libre)",
-        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
-          g.amount.toFixed(0) + " DH" +
-          (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") +
-          ") introuvable sous ce n° — le ticket POS " + p.ticket_name +
-          " (à " + hhmm(p.datetime) + ", " + p.payment_type + ", " +
-          p.total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min) correspond " +
-          "(même montant et mode paiement). Le caissier a probablement tapé « " +
-          p.ticket_name + " » au lieu du n° Glovo.",
-        source_ref: g.order_id,
-        amount_pos: p.total, amount_source: g.amount,
-        payment_pos: p.payment_type,
-        payment_source: exp,
-      }));
-    });
+      pairs.sort(function (a, b) { return a.gap - b.gap; });
+      pairs.forEach(function (pr) {
+        if (matched.has(pr.gi) || wrongNameUsed.has(pr.p.ticket_no)) return;
+        matched.add(pr.gi);
+        wrongNameUsed.add(pr.p.ticket_no);
+        var g = delivered[pr.gi], p = pr.p;
+        markGlovoPosMatch(g, p);
+        p.channel = CH_GLOVO;
+        p.channel_match = "glovo_wrong_name";
+        anomalies.push(posAnomaly(p, {
+          source: "Glovo", severity: "haute",
+          type: "Numéro Glovo mal saisi au POS",
+          detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
+            g.amount.toFixed(0) + " DH" +
+            (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") +
+            ") introuvable sous son numéro — le ticket POS « " + p.ticket_name +
+            " » (à " + hhmm(p.datetime) + ", " + p.payment_type + ", " +
+            p.total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min) correspond " +
+            "exactement (même montant, même mode de paiement). Le caissier a tapé « " +
+            p.ticket_name + " » au lieu du numéro de commande Glovo.",
+          source_ref: g.order_id,
+          amount_pos: p.total, amount_source: g.amount,
+          payment_pos: p.payment_type,
+          payment_source: pr.exp,
+        }));
+      });
+    }
+    assignWrongTicketName(WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
+    assignWrongTicketName(WINDOW_BEFORE_MIN, MAX_LATE_ENTRY_MIN);
 
-    // Phase 3 : saisie tardive (±120 min, bon paiement, montant identique).
-    assignGlobalList(delivered, matched, isExp, 120, 120, true, false).forEach(function (pr) {
+    // Phase 3 : saisie tardive (dans l'heure, bon paiement, montant identique).
+    assignGlobalList(delivered, matched, isExp, WINDOW_BEFORE_MIN, MAX_LATE_ENTRY_MIN,
+                     true, false).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi];
       var delay = minutesBetween(p.datetime, g.received_at);
       anomalies.push(posAnomaly(p, { source: "Glovo", severity: "info",
@@ -923,7 +934,8 @@
     });
     var cancelledMatched = new Set();
     assignGlobalList(cancelled, cancelledMatched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, true, false);
-    assignGlobalList(cancelled, cancelledMatched, isExp, 120, 120, true, false).forEach(function (pr) {
+    assignGlobalList(cancelled, cancelledMatched, isExp, WINDOW_BEFORE_MIN, MAX_LATE_ENTRY_MIN,
+                     true, false).forEach(function (pr) {
       var g = cancelled[pr.gi], p = pool[pr.pi];
       g.matched_pos = true;
       var delay = minutesBetween(p.datetime, g.received_at);
@@ -954,6 +966,12 @@
           if (isNaN(g.amount) || isNaN(p.total)) return;
           var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
           var tapBrut = !isNaN(g.subtotal) && Math.abs(p.total - g.subtotal) <= AMOUNT_TOL;
+          // Un écart de saisie reste proche du montant réel (ou = subtotal brut W).
+          // Sinon ce n'est pas la même commande : la laisser « absente du POS ».
+          if (!tapBrut &&
+              Math.abs(p.total - g.amount) > Math.max(g.amount * AMOUNT_MISMATCH_MAX_RATIO, 30)) {
+            return;
+          }
           pairs.push({ gi: gi, pi: pi, cost: gap + (tapBrut ? 0 : 0.5) });
         });
       });
@@ -1434,7 +1452,7 @@
     glovo.forEach(function (g) {
       if ((g.status || "").toLowerCase() !== "delivered" || !g.received_at) return;
       var gap = Math.abs(minutesBetween(mid, g.received_at));
-      if (gap > 120) return;
+      if (gap > MAX_LATE_ENTRY_MIN) return;
       var ok = amounts.some(function (a) {
         return !isNaN(a) && !isNaN(g.amount) && Math.abs(a - g.amount) <= AMOUNT_TOL;
       });
@@ -1470,25 +1488,31 @@
         }
         return;
       }
-      // Commande absente : suggestion montage+paiement+heure, puis contenu produits
+      // Commande absente : suggestion montant+paiement, puis montant seul, puis produits.
+      // Toujours dans l'heure : au-delà, ce n'est pas la même commande.
       if (g && !p && (a.type === "Commande Glovo absente du POS") && g.received_at) {
         var expPay = GLOVO_PAYMENT_MAP[g.payment_type];
-        var bestWrong = null, bestGap = 1e9;
+        var bestAmt = null, bestAmtGap = 1e9, bestAmtSamePay = false;
         pos.forEach(function (px) {
-          if (px.channel === CH_GLOVO || px.channel === CH_SITE) return;
           if (px.matched_glovo_order) return;
-          if (px.payment_type !== expPay) return;
           if (!px.datetime || isNaN(px.total) || isNaN(g.amount)) return;
           if (Math.abs(px.total - g.amount) > AMOUNT_TOL) return;
           var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
-          if (gap > WINDOW_AFTER_MIN) return;
-          if (gap < bestGap) { bestGap = gap; bestWrong = px; }
+          if (gap > MAX_LATE_ENTRY_MIN) return;
+          var samePay = px.payment_type === expPay;
+          // Un ticket au bon mode de paiement primes sur un ticket plus proche en temps.
+          if (samePay && !bestAmtSamePay) {
+            bestAmt = px; bestAmtGap = gap; bestAmtSamePay = true;
+          } else if (samePay === bestAmtSamePay && gap < bestAmtGap) {
+            bestAmt = px; bestAmtGap = gap;
+          }
         });
-        if (bestWrong) {
-          a.detail += " [Suggestion : ticket " + bestWrong.ticket_name + " ligne " +
-            bestWrong.row + " à " + hhmm(bestWrong.datetime) +
-            " — même montant+paiement (" + expPay + ", +" + bestGap.toFixed(0) +
-            " min), probable mauvais n° SP/EMP]";
+        if (bestAmt) {
+          a.detail += " [Suggestion : ticket " + (bestAmt.ticket_name || bestAmt.ticket_no) +
+            " ligne " + bestAmt.row + " à " + hhmm(bestAmt.datetime) +
+            " — même montant (" + bestAmt.payment_type +
+            (bestAmtSamePay ? ", mode attendu" : ", mode ≠ " + expPay) +
+            ", +" + bestAmtGap.toFixed(0) + " min) : numéro de ticket probablement mal saisi]";
           return;
         }
         if (!g.order_items) return;
@@ -1496,7 +1520,7 @@
         pos.forEach(function (px) {
           if (px.channel !== CH_GLOVO || !px.datetime || !px.designations) return;
           var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
-          if (gap > 120) return;
+          if (gap > MAX_LATE_ENTRY_MIN) return;
           var sc = productSimilarity(px.designations, g.order_items);
           if (sc > bestScore) { bestScore = sc; bestP = px; }
         });
@@ -1519,7 +1543,7 @@
 
   function glovoMatchForPosLine(p, glovo, wideWindow) {
     if (!glovo || p.channel !== CH_GLOVO || !p.datetime) return null;
-    var afterMin = wideWindow ? 120 : WINDOW_AFTER_MIN;
+    var afterMin = wideWindow ? MAX_LATE_ENTRY_MIN : WINDOW_AFTER_MIN;
     var best = null, bestScore = 1e9;
     glovo.forEach(function (g) {
       if ((g.status || "").toLowerCase() !== "delivered" || !g.received_at) return;
