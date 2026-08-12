@@ -1868,6 +1868,12 @@
       if (p.channel !== CH_SITE) return a;
       return a + (allocatePosPaymentAmounts(p)["Cash"] || 0);
     }, 0);
+    var posSiteCC = pos.reduce(function (a, p) {
+      if (p.channel !== CH_SITE) return a;
+      return a + (allocatePosPaymentAmounts(p)["Credit card"] || 0);
+    }, 0);
+  // Emporter site = payé au comptoir (Cash ou CB) — pas Bank Transfer.
+    var posSiteCounter = posSiteCash + posSiteCC;
     var siteCashSrc = 0;
     if (site) {
       site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
@@ -1876,11 +1882,13 @@
       });
     }
 
-    var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCash, siteCashSrc);
+    var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCounter, siteCashSrc,
+      posSiteCash, posSiteCC);
 
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines,
              payment_breakdown: payment_breakdown,
-             site_cash_pos: posSiteCash, site_cash_src: siteCashSrc,
+             site_cash_pos: posSiteCash, site_cc_pos: posSiteCC,
+             site_counter_pos: posSiteCounter, site_cash_src: siteCashSrc,
              cash_to_collect: cash_to_collect };
   }
 
@@ -1890,9 +1898,12 @@
    * - TPE : POS « Credit card » > relevé NAPS → cash à collecter
    * collect_amount > 0 = à collecter · < 0 = sur-saisie POS (réduit le net)
    */
-  function buildCashToCollect(lines, byPayment, siteCashPos, siteCashSrc) {
+  function buildCashToCollect(lines, byPayment, siteCounterPos, siteCashSrc,
+      siteCashPos, siteCCPos) {
     var items = [];
     var totalCollect = 0, totalOver = 0;
+    siteCashPos = siteCashPos || 0;
+    siteCCPos = siteCCPos || 0;
 
     function addItem(item) {
       var ca = item.collect_amount || 0;
@@ -1917,18 +1928,26 @@
       });
     }
 
-    var siteEcart = siteCashSrc - siteCashPos;
-    if (Math.abs(siteEcart) >= 0.5 || siteCashSrc > 0 || siteCashPos > 0) {
+    // Emporter : comparer le fichier site au POS comptoir (Cash + CB), pas Cash seul.
+    var siteEcart = siteCashSrc - siteCounterPos;
+    if (Math.abs(siteEcart) >= 0.5 || siteCashSrc > 0 || siteCounterPos > 0) {
+      var posDetail = "";
+      if (siteCashPos > 0 || siteCCPos > 0) {
+        posDetail = "Cash " + Math.round(siteCashPos) + " DH";
+        if (siteCCPos > 0) posDetail += " + CB " + Math.round(siteCCPos) + " DH";
+      }
       addItem({
         lineKey: "site_cash",
-        label: "🌐 Site — Cash (emporter)",
-        pos_label: "POS Site « Cash »",
+        label: "🌐 Site — emporter (comptoir)",
+        pos_label: "POS Site « Cash + Credit card »",
         src_label: "Site emporter Fermée",
-        pos: siteCashPos,
+        pos: siteCounterPos,
         src: siteCashSrc,
         ecart: siteEcart,
         collect_amount: siteEcart > 0.5 ? siteEcart : (siteEcart < -0.5 ? siteEcart : 0),
-        hint: "Commandes site à emporter payées en cash au comptoir — écart positif = sous-saisie POS.",
+        hint: "Commandes site à emporter payées au comptoir (Cash ou CB). " +
+          (posDetail ? "POS : " + posDetail + ". " : "") +
+          "Écart positif = sous-saisie au POS (hors Bank Transfer livraison).",
       });
     }
 
@@ -2153,9 +2172,11 @@
     return { pays: fin.pays, by_payment: fin.by_payment, matrix: fin.matrix,
              lines: lines, adjustments_applied: true,
              payment_breakdown: fin.payment_breakdown,
-             site_cash_pos: fin.site_cash_pos, site_cash_src: fin.site_cash_src,
+             site_cash_pos: fin.site_cash_pos, site_cc_pos: fin.site_cc_pos,
+             site_counter_pos: fin.site_counter_pos, site_cash_src: fin.site_cash_src,
              cash_to_collect: buildCashToCollect(lines, fin.by_payment,
-               fin.site_cash_pos || 0, fin.site_cash_src || 0) };
+               fin.site_counter_pos || fin.site_cash_pos || 0, fin.site_cash_src || 0,
+               fin.site_cash_pos || 0, fin.site_cc_pos || 0) };
   }
 
   function annotate(pos, anomalies) {

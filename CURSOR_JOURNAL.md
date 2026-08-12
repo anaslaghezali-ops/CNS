@@ -583,6 +583,18 @@ montant sur la journée → reclasse **SP&EMP** (`spemp_bipeur`), info au lieu d
 
 ---
 
+### 2026-08-12 — Fix faux +80 DH « Cash à collecter » Site emporter (Cash + CB)
+
+**Problème** : réconciliation Site = 0 DH écart mais « Cash à collecter » +80 DH
+(Site emporter 190 vs POS Cash 110). Les 80 DH étaient déjà saisis en **Credit card** Site.
+
+**Règle** : emporter comptoir = comparer fichier site à POS **Cash + Credit card** (pas Cash seul).
+Livraison site reste Bank Transfer (hors cette ligne).
+
+**Fichiers** : `docs/reconcile.js`, `docs/index.html`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
