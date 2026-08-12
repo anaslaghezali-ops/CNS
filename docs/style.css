@@ -208,4 +208,10 @@ tbody tr:hover { background: #fbfbfb; }
 .cash-collect-item .cc-ecart-neg { color: #666; font-weight: 700; }
 .cash-collect-item .cc-hint { font-size: .82rem; color: #777; margin-top: 6px; }
 
+.spemp-review-block {
+  margin: 16px 0; padding: 14px 16px; background: #f5f8fc;
+  border: 1px solid #c5d9ea; border-radius: 8px;
+}
+.spemp-review-block h3 { margin: 0 0 8px; font-size: 1rem; color: #2c5282; }
+
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }

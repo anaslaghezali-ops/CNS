@@ -530,6 +530,20 @@ Note si tickets Glovo en CB/autre hors décomposition Online/Cash.
 
 ---
 
+### 2026-08-12 — Canal « Autre » → SP&EMP + liste tickets hors Glovo/Site
+
+**Demandé par** : gérant — tickets ni Glovo ni Site = sur place (pas de source externe).
+Lister les libellés libres et « À rattacher ».
+
+**Règles** :
+- Classification : défaut `Sur place / Emporter` (plus de canal « Autre »)
+- Section **SP&EMP hors Glovo/Site** : libellés libres + tickets à rattacher
+- Export Excel `SP&EMP hors Glovo-Site`
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `reconciliation/classify.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

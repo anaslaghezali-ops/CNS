@@ -8,7 +8,7 @@ Règles (définies avec le gérant ChickNSter) :
   - « sp… » / « emp… »            → Sur place / À emporter
     (ex. sp, emp9, **9sp**, 2sp — chiffres avant ou après)
   - vide                          → À rattacher (ticket name oublié)
-  - autre                         → Autre / manuel
+  - autre (hors Glovo/Site)           → Sur place / Emporter (pas de source externe)
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def classify_ticket_name(ticket_name: str, site_ids: set[str] | None = None) -> 
     if _RE_5_DIGITS.match(name):
         return CHANNEL_SITE
 
-    return CHANNEL_OTHER
+    return CHANNEL_DINEIN
 
 
 def add_channel_column(pos_df: pd.DataFrame, site_ids: set[str] | None = None) -> pd.DataFrame:

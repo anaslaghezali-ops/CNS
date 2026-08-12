@@ -316,6 +316,7 @@
     renderCashToCollect(getAdjustedFinancial());
     renderFinancial(getAdjustedFinancial());
     renderNapsBalanced();
+    renderSpempReview();
 
     var sources = uniq(activeAnomalies().map(function (a) { return a.source; }));
     var wrap = document.getElementById("fsrc-wrap");
@@ -495,6 +496,39 @@
       return "<td><b>" + fmtDH(colTot[p]) + "</b></td>"; }).join("") +
       "<td><b>" + fmtDH(grand) + "</b></td></tr></tbody>";
     document.getElementById("fin-matrix").innerHTML = mhead + mbody;
+  }
+
+  function renderSpempReview() {
+    var section = document.getElementById("spemp-review-section");
+    var content = document.getElementById("spemp-review-content");
+    var vs = getViewState();
+    var rows = vs && vs.spemp_review ? vs.spemp_review : [];
+    if (!rows.length) {
+      section.classList.add("hidden");
+      content.innerHTML = "";
+      return;
+    }
+    section.classList.remove("hidden");
+    var total = rows.reduce(function (s, r) {
+      return s + (r.total == null || isNaN(r.total) ? 0 : r.total);
+    }, 0);
+    var html = "<p class='muted' style='margin:0 0 10px'><b>" + rows.length +
+      "</b> ticket(s) · <b>" + Math.round(total).toLocaleString("fr-FR") + " DH</b></p>";
+    html += '<div class="table-wrap"><table><thead><tr>' +
+      "<th>Date/heure</th><th>Ticket name</th><th>N° POS</th><th>Total</th>" +
+      "<th>Paiement</th><th>Type</th></tr></thead><tbody>";
+    rows.forEach(function (r) {
+      var kind = r.kind === "a_rattacher" ?
+        "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#fff3e6;" +
+        "border:1px solid #e8d4b8;color:#8b5a2b'>À rattacher</span>" :
+        "<span class='muted'>Libellé libre → SP&EMP</span>";
+      html += "<tr><td>" + escapeHtml(r.when || "") + "</td><td>" +
+        escapeHtml(r.ticket_name) + "</td><td>" + escapeHtml(r.ticket_no) + "</td><td><b>" +
+        (r.total == null || isNaN(r.total) ? "—" : fmtDH(r.total)) + "</b></td><td>" +
+        escapeHtml(r.payment_type) + "</td><td>" + kind + "</td></tr>";
+    });
+    html += "</tbody></table></div>";
+    content.innerHTML = html;
   }
 
   function renderNapsBalanced() {

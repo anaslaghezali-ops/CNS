@@ -305,20 +305,39 @@
   var RE_5 = /^\d{5}$/;
   var RE_SPEMP = /^\d*(sp|emp)\d*$/i;
 
-  function classify(name, siteIds) {
+  function classifyDetail(name, siteIds) {
     var n = s(name);
-    if (n === "" || n.toLowerCase() === "nan") return CH_UNASSIGNED;
-    if (siteIds && siteIds.has(n)) return CH_SITE;
-    // « Ticket » (placeholder) = numéro oublié par le caissier -> à rattacher.
-    if (n.toLowerCase() === "ticket") return CH_UNASSIGNED;
+    if (n === "" || n.toLowerCase() === "nan") {
+      return { channel: CH_UNASSIGNED, match: "vide" };
+    }
+    if (siteIds && siteIds.has(n)) {
+      return { channel: CH_SITE, match: "site_fichier" };
+    }
+    if (n.toLowerCase() === "ticket") {
+      return { channel: CH_UNASSIGNED, match: "ticket_placeholder" };
+    }
     var compact = n.replace(/\s/g, "");
-    if (RE_SPEMP.test(compact)) return CH_DINEIN;
-    if (RE_1_3.test(n)) return CH_GLOVO;
-    if (RE_5.test(n)) return CH_SITE;
-    return CH_OTHER;
+    if (RE_SPEMP.test(compact)) {
+      return { channel: CH_DINEIN, match: "spemp" };
+    }
+    if (RE_1_3.test(n)) {
+      return { channel: CH_GLOVO, match: "glovo" };
+    }
+    if (RE_5.test(n)) {
+      return { channel: CH_SITE, match: "site_5chiffres" };
+    }
+    // Pas Glovo ni Site → sur place / emporter (pas de source externe à réconcilier).
+    return { channel: CH_DINEIN, match: "spemp_libre" };
+  }
+  function classify(name, siteIds) {
+    return classifyDetail(name, siteIds).channel;
   }
   function addChannel(pos, siteIds) {
-    pos.forEach(function (p) { p.channel = classify(p.ticket_name, siteIds); });
+    pos.forEach(function (p) {
+      var d = classifyDetail(p.ticket_name, siteIds);
+      p.channel = d.channel;
+      p.channel_match = d.match;
+    });
     return pos;
   }
 
@@ -1575,7 +1594,29 @@
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
     summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
-    return { anomalies: anomalies, pos: pos, summary: summary, naps_balanced: naps_balanced };
+    return {
+      anomalies: anomalies, pos: pos, summary: summary,
+      naps_balanced: naps_balanced,
+      spemp_review: buildSpempReviewList(pos),
+    };
+  }
+
+  /** Tickets SP&EMP sans source externe : libellé libre ou à rattacher. */
+  function buildSpempReviewList(pos) {
+    return pos.filter(function (p) {
+      return p.channel_match === "spemp_libre" || p.channel === CH_UNASSIGNED;
+    }).map(function (p) {
+      return {
+        ticket_no: p.ticket_no || "",
+        ticket_name: p.ticket_name || "",
+        total: isNaN(p.total) ? null : p.total,
+        payment_type: p.payment_type || "",
+        when: dtFull(p.datetime),
+        row: p.row,
+        kind: p.channel === CH_UNASSIGNED ? "a_rattacher" : "libre",
+        channel_match: p.channel_match || "",
+      };
+    });
   }
 
   function listPosDates(pos) {
