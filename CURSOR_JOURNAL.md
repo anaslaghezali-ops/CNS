@@ -493,6 +493,15 @@ avec ventilation par canal sous chaque mode :
 
 ---
 
+### 2026-08-12 — Cash à collecter : POS CB > NAPS (TPE)
+
+**Demandé par** : gérant — si le POS Credit card &gt; relevé NAPS, l'écart est du cash à collecter.
+Le total se recalcule après validation d'anomalies (ligne TPE ajustée comme la réconciliation financière).
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

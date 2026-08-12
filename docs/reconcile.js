@@ -1583,36 +1583,41 @@
   }
 
   /**
-   * Cash à récupérer des caissiers : écarts positifs source − POS sur les lignes Cash
-   * (Glovo Cash, Site emporter Cash). Écart + = la source encaisse plus que le POS.
+   * Cash à récupérer des caissiers :
+   * - Glovo Cash / Site emporter : source > POS (écarts positifs source − POS)
+   * - TPE : POS « Credit card » > relevé NAPS → cash à collecter
+   * collect_amount > 0 = à collecter · < 0 = sur-saisie POS (réduit le net)
    */
   function buildCashToCollect(lines, byPayment, siteCashPos, siteCashSrc) {
     var items = [];
     var totalCollect = 0, totalOver = 0;
 
-    function pushItem(item) {
+    function addItem(item) {
+      var ca = item.collect_amount || 0;
       items.push(item);
-      if (item.ecart > 0.5) totalCollect += item.ecart;
-      else if (item.ecart < -0.5) totalOver += -item.ecart;
+      if (ca > 0.5) totalCollect += ca;
+      else if (ca < -0.5) totalOver += -ca;
     }
 
     var glovoLine = lines.filter(function (l) { return l.lineKey === "glovo_cash"; })[0];
     if (glovoLine) {
-      pushItem({
+      var gE = glovoLine.ecart;
+      addItem({
         lineKey: "glovo_cash",
         label: glovoLine.source,
         pos_label: glovoLine.pos_label,
         src_label: glovoLine.src_label,
         pos: glovoLine.pos,
         src: glovoLine.src,
-        ecart: glovoLine.ecart,
+        ecart: gE,
+        collect_amount: gE > 0.5 ? gE : (gE < -0.5 ? gE : 0),
         hint: "Glovo Cash (W − AE) > POS Glovo Cash : les livreurs ont encaissé plus que saisi au POS.",
       });
     }
 
     var siteEcart = siteCashSrc - siteCashPos;
     if (Math.abs(siteEcart) >= 0.5 || siteCashSrc > 0 || siteCashPos > 0) {
-      pushItem({
+      addItem({
         lineKey: "site_cash",
         label: "🌐 Site — Cash (emporter)",
         pos_label: "POS Site « Cash »",
@@ -1620,8 +1625,27 @@
         pos: siteCashPos,
         src: siteCashSrc,
         ecart: siteEcart,
+        collect_amount: siteEcart > 0.5 ? siteEcart : (siteEcart < -0.5 ? siteEcart : 0),
         hint: "Commandes site à emporter payées en cash au comptoir — écart positif = sous-saisie POS.",
       });
+    }
+
+    var napsLine = lines.filter(function (l) { return l.lineKey === "naps"; })[0];
+    if (napsLine) {
+      var tpeOver = napsLine.pos - napsLine.src;
+      if (tpeOver > 0.5) {
+        addItem({
+          lineKey: "naps_tpe_over",
+          label: "💳 TPE — POS CB > relevé NAPS",
+          pos_label: napsLine.pos_label,
+          src_label: napsLine.src_label,
+          pos: napsLine.pos,
+          src: napsLine.src,
+          ecart: napsLine.ecart,
+          collect_amount: tpeOver,
+          hint: "Le POS enregistre plus de carte que le relevé NAPS — à récupérer en cash des caissiers.",
+        });
+      }
     }
 
     var posCash = byPayment["Cash"] || 0;

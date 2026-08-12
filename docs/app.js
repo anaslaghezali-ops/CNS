@@ -390,7 +390,7 @@
 
     if (cc.net_to_collect <= 0 && cc.total_to_collect <= 0) {
       html += "<p class='muted' style='margin:8px 0 0'>✅ Rien à collecter en plus du POS — " +
-        "Cash aligné avec Glovo Cash et Site emporter.</p>";
+        "Cash / Glovo Cash / Site emporter / TPE alignés.</p>";
     } else if (cc.net_to_collect > 0) {
       html += "<p class='muted' style='margin:8px 0 0'>" +
         "Vous devez récupérer <b>" + fmtDH(cc.net_to_collect) + "</b> en plus de ce qui est " +
@@ -398,16 +398,21 @@
         "cash physique attendu : <b>" + fmtDH(cc.cash_expected_physical) + "</b>.</p>";
     }
 
-    var detail = cc.items.filter(function (it) { return Math.abs(it.ecart) >= 0.5; });
+    var detail = cc.items.filter(function (it) {
+      return Math.abs(it.collect_amount || 0) >= 0.5;
+    });
     if (detail.length) {
       html += '<div class="cash-collect-items">' + detail.map(function (it) {
-        var ecartCls = it.ecart > 0 ? "cc-ecart-pos" : "cc-ecart-neg";
-        var sign = it.ecart > 0 ? "+" : "";
+        var ca = it.collect_amount || 0;
+        var ecartCls = ca > 0 ? "cc-ecart-pos" : "cc-ecart-neg";
+        var collectLbl = ca > 0 ? "À collecter : +" + fmtDH(ca) :
+          (ca < 0 ? "Sur-saisie POS : " + fmtDH(ca) : "");
         return '<div class="cash-collect-item"><div class="cc-row"><b>' +
           escapeHtml(it.label) + "</b><span>" + escapeHtml(it.pos_label) + " : <b>" +
           fmtDH(it.pos) + "</b></span><span>" + escapeHtml(it.src_label) + " : <b>" +
-          fmtDH(it.src) + "</b></span><span class='" + ecartCls + "'>Écart : " +
-          sign + fmtDH(it.ecart) + "</span></div>" +
+          fmtDH(it.src) + "</b></span>" +
+          (collectLbl ? "<span class='" + ecartCls + "'>" + collectLbl + "</span>" : "") +
+          "</div>" +
           (it.hint ? "<div class='cc-hint'>" + escapeHtml(it.hint) + "</div>" : "") +
           "</div>";
       }).join("") + "</div>";
@@ -841,11 +846,12 @@
         ["À collecter des caissiers (net)", cc.net_to_collect],
         ["Cash réel attendu en caisse", cc.cash_expected_physical],
         [],
-        ["Détail par source", "POS", "Source", "Écart (source − POS)"],
+        ["Détail par source", "POS", "Source", "À collecter (DH)"],
       ];
       cc.items.forEach(function (it) {
-        if (Math.abs(it.ecart) < 0.5) return;
-        rows.push([it.label, Math.round(it.pos), Math.round(it.src), Math.round(it.ecart)]);
+        var ca = it.collect_amount || 0;
+        if (Math.abs(ca) < 0.5) return;
+        rows.push([it.label, Math.round(it.pos), Math.round(it.src), Math.round(ca)]);
       });
       return rows;
     }
