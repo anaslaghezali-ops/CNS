@@ -223,8 +223,8 @@
   function enrichFinCashCollect(fin, viewState) {
     if (!fin || !fin.cash_to_collect || !viewState || !viewState.pos) return fin;
     CNS.finalizeCashToCollectUsers(
-      fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.naps,
-      viewState.site, CNS.listPosDates(viewState.pos), viewState.anomalies || []);
+      fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.site,
+      viewState.naps, CNS.listPosDates(viewState.pos), viewState.anomalies || []);
     CNS.applyCashUserAssignments(fin.cash_to_collect, state.cashUserAssignments || {});
     return fin;
   }
@@ -409,11 +409,23 @@
       (cc.net_to_collect === 0 ? "cc-ok" : "");
     var netSign = cc.net_to_collect > 0 ? "+" : "";
 
+    var collectWhoInline = "";
+    if (cc.by_user && cc.by_user.length && cc.net_to_collect > 0) {
+      var toCollectUsers = cc.by_user.filter(function (u) { return u.net_to_collect > 0.5; });
+      if (toCollectUsers.length) {
+        collectWhoInline = '<div class="cc-who-inline">' +
+          toCollectUsers.map(function (u) {
+            return "<span><b>" + escapeHtml(u.user) + "</b> +" + fmtDH(u.net_to_collect) + "</span>";
+          }).join("") + "</div>";
+      }
+    }
+
     var html = '<div class="cash-collect-summary">' +
       '<div class="cc-item"><div class="cc-label">Cash saisi au POS (total)</div>' +
       '<div class="cc-value">' + fmtDH(cc.pos_cash_recorded) + "</div></div>" +
-      '<div class="cc-item"><div class="cc-label">À collecter des caissiers</div>' +
-      '<div class="cc-value ' + netCls + '">' + netSign + fmtDH(cc.net_to_collect) + "</div></div>" +
+      '<div class="cc-item cc-item-collect"><div class="cc-label">À collecter des caissiers</div>' +
+      '<div class="cc-value ' + netCls + '">' + netSign + fmtDH(cc.net_to_collect) + "</div>" +
+      collectWhoInline + "</div>" +
       '<div class="cc-item"><div class="cc-label">Cash réel attendu en caisse</div>' +
       '<div class="cc-value cc-highlight">' + fmtDH(cc.cash_expected_physical) + "</div></div>" +
       "</div>";

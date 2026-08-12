@@ -671,6 +671,18 @@ filtre Glovo/Site sur la période POS, ventilation cash/NAPS POS côté caisse.
 
 ---
 
+### 2026-08-12 — Cash à collecter TPE : user depuis anomalie NAPS
+
+**Problème** : +164 DH à collecter sans nom de caissier ; l’anomalie « Paiement POS
+absent du TPE » (ticket Sp5) a un User POS.
+
+**Fix** : ventilation par user via les anomalies NAPS (User col. F) · encart
+« À récupérer par utilisateur » en tête de section.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
