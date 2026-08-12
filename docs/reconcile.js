@@ -66,6 +66,9 @@
     return (h < 10 ? "0" + h : h) + ":" + (m < 10 ? "0" + m : m);
   }
 
+  function dtFull(d) {
+    return d ? dateKey(d) + " " + hhmm(d) : "";
+  }
   function anomaly(o) {
     return {
       source: o.source, severity: o.severity, type: o.type,
@@ -74,6 +77,8 @@
       amount_pos: o.amount_pos == null ? null : o.amount_pos,
       amount_source: o.amount_source == null ? null : o.amount_source,
       payment_pos: o.payment_pos || "", payment_source: o.payment_source || "",
+      file: o.file || "", row: o.row == null ? "" : o.row,
+      when: o.when || (o.pos_datetime ? dtFull(o.pos_datetime) : ""),
     };
   }
 
@@ -81,7 +86,8 @@
   // Lecture des feuilles -> lignes normalisées
   // ----------------------------------------------------------------------- //
   function sheetAOA(ws) {
-    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: false });
+    // blankrows:true -> l'index de ligne correspond au n° de ligne Excel (i+1).
+    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, blankrows: true });
   }
   function findHeaderRow(aoa, tokens) {
     for (var i = 0; i < aoa.length; i++) {
@@ -96,10 +102,12 @@
     var aoa = sheetAOA(ws);
     var hi = findHeaderRow(aoa, tokens);
     if (hi < 0) throw new Error("En-tête introuvable (attendus : " + tokens.join(", ") + ")");
+    // Origine de la plage : aoa[0] correspond à la ligne Excel (r0 + 1).
+    var r0 = ws["!ref"] ? XLSX.utils.decode_range(ws["!ref"]).s.r : 0;
     var headers = aoa[hi].map(function (h) { return s(h); });
     var out = [];
     for (var i = hi + 1; i < aoa.length; i++) {
-      var r = aoa[i], obj = {};
+      var r = aoa[i] || [], obj = { __row: r0 + i + 1 };  // n° de ligne Excel (1-based)
       for (var c = 0; c < headers.length; c++) obj[headers[c]] = r[c];
       out.push(obj);
     }
@@ -112,6 +120,7 @@
     raw.forEach(function (r) {
       if (s(r["Ticket No."]) === "") return;
       out.push({
+        row: r.__row, file: "POS",
         ticket_no: s(r["Ticket No."]),
         date: s(r["Date"]),
         hour: s(r["Hour"]),
@@ -131,6 +140,7 @@
     raw.forEach(function (r) {
       if (s(r["Order ID"]) === "") return;
       out.push({
+        row: r.__row, file: "Glovo",
         order_id: s(r["Order ID"]),
         payment_type: s(r["Payment type"]),
         status: s(r["Order status"]),
@@ -148,7 +158,8 @@
     raw.forEach(function (r) {
       if (s(r["Montant"]) === "") return;
       var d = toDate(r["Date de transaction"]);
-      out.push({ date_transaction: d, date: dateKey(d), montant: num(r["Montant"]) });
+      out.push({ row: r.__row, file: "NAPS", date_transaction: d, date: dateKey(d),
+                 montant: num(r["Montant"]) });
     });
     return out;
   }
@@ -159,6 +170,7 @@
     raw.forEach(function (r) {
       if (s(r["identifiant"]) === "") return;
       out.push({
+        row: r.__row, file: "Site",
         identifiant: s(r["identifiant"]),
         created_at: toDate(r["Created At"]),
         last_status: s(r["Last Status"]),
@@ -249,7 +261,8 @@
             detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
                     p.total + " DH (POS).",
             ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-            amount_pos: p.total, amount_source: o.order_total }));
+            amount_pos: p.total, amount_source: o.order_total,
+            file: "POS", row: p.row, when: dtFull(p.datetime) }));
         }
         if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
           anomalies.push(anomaly({ source: "Site", severity: "haute",
@@ -257,7 +270,8 @@
             detail: "Commande site " + sid + " : attendu '" + SITE_EXPECTED_PAYMENT +
                     "', trouvé '" + p.payment_type + "' au POS.",
             ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
+            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT,
+            file: "POS", row: p.row, when: dtFull(p.datetime) }));
         }
       }
       // Une commande non livrée (refusée/annulée) PEUT être présente au POS.
@@ -298,7 +312,8 @@
                 " au lieu de " + o.identifiant + "." + payNote,
         ticket_name: m.ticket_name, pos_datetime: m.datetime, source_ref: o.identifiant,
         amount_pos: m.total, amount_source: o.order_total,
-        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
+        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT,
+        file: "POS", row: m.row, when: dtFull(m.datetime) }));
     });
 
     unmatchedDelivered.forEach(function (o, oi) {
@@ -313,7 +328,8 @@
         detail: "Ticket POS " + p.ticket_name + " ressemble à une commande site " +
                 "mais n'existe pas dans le fichier site.",
         ticket_name: p.ticket_name, pos_datetime: p.datetime,
-        amount_pos: p.total, payment_pos: p.payment_type }));
+        amount_pos: p.total, payment_pos: p.payment_type,
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
     return { anomalies: anomalies, missing: missing };
   }
@@ -324,59 +340,57 @@
   function reconcileNaps(pos, naps) {
     var anomalies = [];
     if (!naps.length) return anomalies;
-    var posCC = pos.filter(function (p) { return p.payment_type === "Credit card"; })
-                   .map(function (p) { return { date: dateKey(p.datetime), total: p.total }; });
+    // Tickets POS « Credit card » (avec date/heure, ligne, ticket).
+    var posCC = pos.filter(function (p) { return p.payment_type === "Credit card"; });
 
     var napsDates = naps.map(function (n) { return n.date; }).filter(Boolean).sort();
     var nMin = napsDates[0], nMax = napsDates[napsDates.length - 1];
 
     var posDates = {};
-    posCC.forEach(function (p) { if (p.date) posDates[p.date] = true; });
+    posCC.forEach(function (p) { var d = dateKey(p.datetime); if (d) posDates[d] = true; });
 
-    // 1) Journées non couvertes
     Object.keys(posDates).sort().forEach(function (d) {
+      var posDay = posCC.filter(function (p) { return dateKey(p.datetime) === d; });
+
+      // Journée non couverte par le relevé NAPS -> info (décalage télécollecte).
       if (!(d >= nMin && d <= nMax)) {
-        var rows = posCC.filter(function (p) { return p.date === d; });
-        var total = rows.reduce(function (a, p) { return a + (p.total || 0); }, 0);
-        anomalies.push(anomaly({ source: "NAPS", severity: "moyenne",
+        var total = posDay.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0);
+        anomalies.push(anomaly({ source: "NAPS", severity: "info",
           type: "Journée non couverte par le relevé NAPS",
-          detail: rows.length + " paiement(s) 'Credit card' du " + d + " (" +
+          detail: posDay.length + " paiement(s) 'Credit card' du " + d + " (" +
                   total.toFixed(0) + " DH) : le relevé NAPS fourni couvre du " + nMin +
                   " au " + nMax + " (décalage de télécollecte probable).",
           source_ref: d }));
+        return;
       }
-    });
 
-    // 2) Rapprochement (date, montant) — nombre + montant
-    Object.keys(posDates).sort().forEach(function (d) {
-      if (!(d >= nMin && d <= nMax)) return;
-      var posC = {}, napsC = {};
-      posCC.filter(function (p) { return p.date === d; }).forEach(function (p) {
-        var k = (Math.round(p.total * 100) / 100);
-        posC[k] = (posC[k] || 0) + 1;
-      });
-      naps.filter(function (n) { return n.date === d; }).forEach(function (n) {
-        var k = (Math.round(n.montant * 100) / 100);
-        napsC[k] = (napsC[k] || 0) + 1;
-      });
-      var amounts = {};
-      Object.keys(posC).forEach(function (k) { amounts[k] = true; });
-      Object.keys(napsC).forEach(function (k) { amounts[k] = true; });
-      Object.keys(amounts).map(Number).sort(function (a, b) { return a - b; }).forEach(function (amt) {
-        var pc = posC[amt] || 0, nc = napsC[amt] || 0;
-        if (pc > nc) {
-          anomalies.push(anomaly({ source: "NAPS", severity: "haute",
-            type: "Paiement POS absent du TPE",
-            detail: (pc - nc) + " paiement(s) 'Credit card' de " + amt.toFixed(0) +
-                    " DH le " + d + " au POS sans équivalent dans le relevé NAPS.",
-            source_ref: d, amount_pos: amt }));
-        } else if (nc > pc) {
-          anomalies.push(anomaly({ source: "NAPS", severity: "haute",
-            type: "Transaction TPE absente du POS",
-            detail: (nc - pc) + " transaction(s) NAPS de " + amt.toFixed(0) +
-                    " DH le " + d + " sans équivalent 'Credit card' au POS.",
-            source_ref: d, amount_source: amt }));
+      // Rapprochement transaction par transaction, par montant, sur la journée.
+      var napsDay = naps.filter(function (n) { return n.date === d; });
+      var napsUsed = new Set();
+      posDay.forEach(function (p) {
+        var amt = Math.round((isNaN(p.total) ? 0 : p.total) * 100) / 100;
+        var found = -1;
+        for (var i = 0; i < napsDay.length; i++) {
+          if (napsUsed.has(i)) continue;
+          if (Math.round(napsDay[i].montant * 100) / 100 === amt) { found = i; break; }
         }
+        if (found >= 0) { napsUsed.add(found); return; }  // apparié -> OK
+        anomalies.push(anomaly({ source: "NAPS", severity: "haute",
+          type: "Paiement POS absent du TPE",
+          detail: "Paiement 'Credit card' de " + amt.toFixed(0) + " DH au POS le " + d +
+                  " à " + hhmm(p.datetime) + " (ticket " + p.ticket_name + ") sans équivalent " +
+                  "dans le relevé NAPS.",
+          ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: p.ticket_no,
+          amount_pos: amt, file: "POS", row: p.row, when: dtFull(p.datetime) }));
+      });
+      // Transactions NAPS non appariées.
+      napsDay.forEach(function (n, i) {
+        if (napsUsed.has(i)) return;
+        anomalies.push(anomaly({ source: "NAPS", severity: "haute",
+          type: "Transaction TPE absente du POS",
+          detail: "Transaction NAPS de " + n.montant.toFixed(0) + " DH le " + d +
+                  " (ligne " + n.row + " du relevé) sans équivalent 'Credit card' au POS.",
+          source_ref: d, amount_source: n.montant, file: "NAPS", row: n.row, when: d }));
       });
     });
     return anomalies;
@@ -479,7 +493,8 @@
                 p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
                 " à " + hhmm(p.datetime) + ").",
         ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-        payment_pos: p.payment_type, payment_source: exp }));
+        payment_pos: p.payment_type, payment_source: exp,
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
 
     // Phase 3 : saisie tardive (fenêtre élargie ±120 min, bon mode de paiement).
@@ -493,7 +508,8 @@
                 hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +
                 (delay >= 0 ? "+" : "") + delay.toFixed(0) + " min) — présente mais tardive.",
         ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-        amount_pos: p.total, amount_source: g.subtotal }));
+        amount_pos: p.total, amount_source: g.subtotal,
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
 
     // Commandes non appariées -> passe commune (ticket sans numéro) puis « absente ».
@@ -503,7 +519,8 @@
         anomalies.push(anomaly({ source: "Glovo", severity: "moyenne",
           type: "Commande Glovo sans heure de réception",
           detail: "Commande Glovo " + g.order_id + " sans heure exploitable — " +
-                  "rapprochement manuel nécessaire.", source_ref: g.order_id }));
+                  "rapprochement manuel nécessaire.", source_ref: g.order_id,
+          file: "Glovo", row: g.row }));
       } else {
         missing.push(g);
       }
@@ -518,7 +535,8 @@
                   p.payment_type + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
                   " DH) classé Glovo mais sans commande Glovo dans la fenêtre.",
           ticket_name: p.ticket_name, pos_datetime: p.datetime,
-          amount_pos: p.total, payment_pos: p.payment_type }));
+          amount_pos: p.total, payment_pos: p.payment_type,
+          file: "POS", row: p.row, when: dtFull(p.datetime) }));
       }
     });
     return { anomalies: anomalies, missing: missing };
@@ -580,7 +598,8 @@
                 " (+" + pr.gap.toFixed(0) + " min). Présente — simple oubli de numéro.",
         ticket_name: best.ticket_name || "(vide)", pos_datetime: best.datetime,
         source_ref: String(d.id), amount_pos: best.total, amount_source: d.amount,
-        payment_pos: best.payment_type }));
+        payment_pos: best.payment_type,
+        file: "POS", row: best.row, when: dtFull(best.datetime) }));
     });
 
     demands.forEach(function (d, di) {
@@ -589,7 +608,8 @@
         anomalies.push(anomaly({ source: "Site", severity: "haute",
           type: "Commande livrée absente du POS",
           detail: "Commande site " + d.id + " livrée mais introuvable dans le POS.",
-          source_ref: String(d.id), amount_source: d.amount }));
+          source_ref: String(d.id), amount_source: d.amount,
+          file: "Site", row: d.o.row, when: d.ref ? dtFull(d.ref) : "" }));
       } else {
         anomalies.push(anomaly({ source: "Glovo", severity: "haute",
           type: "Commande Glovo absente du POS",
@@ -598,7 +618,8 @@
                   ", " + d.amount.toFixed(0) + " DH) non retrouvée au POS " +
                   "(aucun ticket au bon mode de paiement).",
           source_ref: String(d.id), amount_source: d.amount,
-          payment_source: d.pay || "?" }));
+          payment_source: d.pay || "?",
+          file: "Glovo", row: d.o.row, when: d.ref ? dtFull(d.ref) : "" }));
       }
     });
 
@@ -612,7 +633,8 @@
                 (isNaN(p.total) ? "?" : p.total) + " DH) sans numéro — non rattaché à " +
                 "une commande Glovo ni Site.",
         ticket_name: p.ticket_name || "(vide)", pos_datetime: p.datetime,
-        amount_pos: p.total, payment_pos: p.payment_type }));
+        amount_pos: p.total, payment_pos: p.payment_type,
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
     return anomalies;
   }
@@ -653,7 +675,8 @@
           detail: "Ticket " + p.ticket_name + " sur place/emporter payé '" +
                   p.payment_type + "' (attendu Cash ou Credit card).",
           ticket_name: p.ticket_name, pos_datetime: p.datetime,
-          amount_pos: p.total, payment_pos: p.payment_type }));
+          amount_pos: p.total, payment_pos: p.payment_type,
+          file: "POS", row: p.row, when: dtFull(p.datetime) }));
       }
     });
     return anomalies;
@@ -721,7 +744,54 @@
     summary.pos_date_max = dates.length ? dates[dates.length - 1] : "";
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
+    summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
     return { anomalies: anomalies, pos: pos, summary: summary };
+  }
+
+  // Réconciliation FINANCIÈRE : totaux par mode de paiement × canal, et écarts
+  // POS vs source (TPE/NAPS, Glovo, Site).
+  function computeFinancial(pos, glovo, naps, site, posDates) {
+    var PAYS = ["Cash", "Bank Transfer", "Credit card"];
+    var byPayment = { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
+    var matrix = {};  // canal -> { paiement -> somme }
+    pos.forEach(function (p) {
+      var t = isNaN(p.total) ? 0 : p.total;
+      var pay = PAYS.indexOf(p.payment_type) >= 0 ? p.payment_type : "Autre";
+      byPayment[pay] += t;
+      matrix[p.channel] = matrix[p.channel] || { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
+      matrix[p.channel][pay] += t;
+    });
+
+    function sumPos(channel) {
+      return pos.reduce(function (a, p) {
+        return a + (p.channel === channel && !isNaN(p.total) ? p.total : 0); }, 0);
+    }
+    var posCC = byPayment["Credit card"];
+    var napsTotal = 0;
+    if (naps) naps.forEach(function (n) {
+      if (posDates.has(n.date) && !isNaN(n.montant)) napsTotal += n.montant; });
+
+    var posGlovo = sumPos(CH_GLOVO), glovoW = 0, glovoAP = 0;
+    if (glovo) glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; })
+      .forEach(function (g) {
+        if (!isNaN(g.subtotal)) glovoW += g.subtotal;
+        if (!isNaN(g.earnings)) glovoAP += g.earnings;
+      });
+
+    var posSite = sumPos(CH_SITE), siteL = 0;
+    if (site) site.filter(function (o) { return (o.delivery_status || "").toUpperCase() === "DELIVERED"; })
+      .forEach(function (o) { if (!isNaN(o.order_total)) siteL += o.order_total; });
+
+    var lines = [];
+    if (naps) lines.push({ source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
+      pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC });
+    if (glovo) lines.push({ source: "🛵 Glovo", pos_label: "POS tickets Glovo",
+      pos: posGlovo, src_label: "Glovo brut (col W)", src: glovoW, ecart: glovoW - posGlovo,
+      note: "Réf. net Glovo (AP, après commission) : " + glovoAP.toFixed(0) + " DH." });
+    if (site) lines.push({ source: "🌐 Site", pos_label: "POS tickets Site",
+      pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite });
+
+    return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines };
   }
 
   function annotate(pos, anomalies) {

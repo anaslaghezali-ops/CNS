@@ -123,6 +123,8 @@
              '<div class="bar-label">' + escapeHtml(k) + "</div></div>";
     }).join("");
 
+    renderFinancial(sm.financial);
+
     // Filtres source
     var sources = uniq(state.anomalies.map(function (a) { return a.source; }));
     var wrap = document.getElementById("fsrc-wrap");
@@ -144,13 +146,59 @@
     renderPos();
   }
 
+  function fmtDH(v) {
+    if (v == null || isNaN(v)) return "";
+    return Math.round(v).toLocaleString("fr-FR") + " DH";
+  }
+
+  function renderFinancial(fin) {
+    if (!fin) { document.getElementById("fin-lines").innerHTML = ""; return; }
+    // Tableau des écarts par source
+    var head = "<thead><tr><th>Source</th><th>Côté POS</th><th>Côté source</th>" +
+               "<th>Écart (source − POS)</th></tr></thead>";
+    var body = "<tbody>" + fin.lines.map(function (l) {
+      var cls = Math.abs(l.ecart) < 0.5 ? "st-ok" : "st-anom";
+      var sign = l.ecart > 0 ? "+" : "";
+      var note = l.note ? "<div class='muted' style='font-size:.82rem'>" + escapeHtml(l.note) + "</div>" : "";
+      return "<tr><td><b>" + escapeHtml(l.source) + "</b></td>" +
+             "<td>" + escapeHtml(l.pos_label) + " : <b>" + fmtDH(l.pos) + "</b></td>" +
+             "<td>" + escapeHtml(l.src_label) + " : <b>" + fmtDH(l.src) + "</b>" + note + "</td>" +
+             "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td></tr>";
+    }).join("") + "</tbody>";
+    document.getElementById("fin-lines").innerHTML = head + body;
+
+    // Matrice canal × paiement
+    var pays = fin.pays;
+    var chans = Object.keys(fin.matrix);
+    var colTot = {}; pays.forEach(function (p) { colTot[p] = 0; }); var grand = 0;
+    var mhead = "<thead><tr><th>Canal</th>" + pays.map(function (p) {
+      return "<th>" + escapeHtml(p) + "</th>"; }).join("") + "<th>Total</th></tr></thead>";
+    var mbody = "<tbody>" + chans.map(function (ch) {
+      var row = fin.matrix[ch], rt = 0;
+      var cells = pays.map(function (p) {
+        var v = row[p] || 0; rt += v; colTot[p] += v;
+        return "<td>" + (v ? fmtDH(v) : "—") + "</td>";
+      }).join("");
+      grand += rt;
+      return "<tr><td>" + escapeHtml(ch) + "</td>" + cells +
+             "<td><b>" + fmtDH(rt) + "</b></td></tr>";
+    }).join("");
+    mbody += "<tr><td><b>Total</b></td>" + pays.map(function (p) {
+      return "<td><b>" + fmtDH(colTot[p]) + "</b></td>"; }).join("") +
+      "<td><b>" + fmtDH(grand) + "</b></td></tr></tbody>";
+    document.getElementById("fin-matrix").innerHTML = mhead + mbody;
+  }
+
   function _tableHTML(rows) {
     var head = "<thead><tr><th>Gravité</th><th>Source</th><th>Type</th>" +
+               "<th>Fichier</th><th>Ligne</th><th>Date/heure</th>" +
                "<th>Ticket</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
       return "<tr><td><span class='sev-badge sev-" + a.severity + "'>" +
              SEV_BADGE[a.severity] + "</span></td><td>" + escapeHtml(a.source) +
-             "</td><td>" + escapeHtml(a.type) + "</td><td>" +
+             "</td><td>" + escapeHtml(a.type) + "</td><td>" + escapeHtml(a.file || "") +
+             "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
+             "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
              escapeHtml(a.ticket_name) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
     return head + body;
@@ -237,9 +285,33 @@
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resume), "Résumé");
 
+    // Réconciliation financière
+    var fin = sm.financial;
+    if (fin) {
+      var frows = [["Réconciliation financière (Écart = source − POS)"], []];
+      frows.push(["Source", "Côté POS (libellé)", "Montant POS", "Côté source (libellé)", "Montant source", "Écart"]);
+      fin.lines.forEach(function (l) {
+        frows.push([l.source, l.pos_label, Math.round(l.pos), l.src_label, Math.round(l.src), Math.round(l.ecart)]);
+        if (l.note) frows.push(["", l.note]);
+      });
+      frows.push([], ["Répartition POS : mode de paiement × canal"], []);
+      frows.push(["Canal"].concat(fin.pays, ["Total"]));
+      var colTot = {}; fin.pays.forEach(function (p) { colTot[p] = 0; });
+      Object.keys(fin.matrix).forEach(function (ch) {
+        var row = fin.matrix[ch], rt = 0;
+        var cells = fin.pays.map(function (p) { var v = row[p] || 0; rt += v; colTot[p] += v; return Math.round(v); });
+        frows.push([ch].concat(cells, [Math.round(rt)]));
+      });
+      var grand = 0; fin.pays.forEach(function (p) { grand += colTot[p]; });
+      frows.push(["Total"].concat(fin.pays.map(function (p) { return Math.round(colTot[p]); }), [Math.round(grand)]));
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(frows), "Réconciliation €");
+    }
+
     function toRow(a) {
       return {
         "Gravité": SEV_BADGE[a.severity], "Source": a.source, "Type": a.type,
+        "Fichier": a.file || "", "Ligne": a.row === "" ? "" : a.row,
+        "Date/heure": a.when || "",
         "Ticket POS": a.ticket_name, "Réf. source": a.source_ref,
         "Montant POS": a.amount_pos, "Montant source": a.amount_source,
         "Paiement POS": a.payment_pos, "Paiement attendu": a.payment_source,
