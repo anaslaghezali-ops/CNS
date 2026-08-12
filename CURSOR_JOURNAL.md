@@ -362,6 +362,29 @@ Analyse sur fichiers réels (non versionnés) — pour référence future :
 
 ---
 
+### 2026-08-12 — Écart financier Glovo Online / Site sans explication (bouton « Voir l'écart (0) »)
+
+**Demandé par** : gérant (capture : Glovo Online −188 DH mais 0 ligne d'explication).
+
+**Problèmes identifiés** :
+1. **Syntaxe JS** : `flagMisusedGlovoNumber` sans déclaration de fonction (fichier non chargeable en Node).
+2. **Site −398 DH** : tickets POS Site pour commandes existantes mais **non DELIVERED** (statut vide /
+   « Fermée ») — comptés au POS, pas dans les livrées col L, **sans anomalie**.
+3. **Glovo Cash** : commande **annulée** appariée au POS en phase 1 cancelled sans `matched_pos` →
+   comptée au POS mais pas côté source Glovo Cash.
+4. **Doublons** : surplus Bank Transfer (ex. ticket 878) pouvait générer une 2ᵉ ligne « sans
+   appariement » en double du doublon.
+
+**Corrections** (`docs/reconcile.js`) :
+- Restauration de `flagMisusedGlovoNumber`.
+- `markGlovoPosMatch` sur tous les appariements Glovo ; `matched_pos = true` si commande annulée.
+- `appendFinancialGapAnomalies` : site non livré, Glovo Online/Cash sans appariement financier.
+- `financialAdjustment` pour les nouveaux types + exclusion doublon dans le scan d'écart.
+
+**Script** : `scripts/diagnose_financial.js` (données uploads).
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
