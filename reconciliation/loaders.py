@@ -54,7 +54,7 @@ def _repair_xlsx_bytes(data: bytes) -> bytes:
 
 
 def _to_bytes(source) -> bytes:
-    """Accepte un chemin, des bytes, ou un objet fichier (upload Streamlit)."""
+    """Accepte un chemin, des bytes, ou un objet fichier binaire."""
     if isinstance(source, bytes):
         return source
     if hasattr(source, "read"):

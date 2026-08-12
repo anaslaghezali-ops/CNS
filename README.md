@@ -1,26 +1,29 @@
 # 🐔 ChickNSter — Système de réconciliation
 
-Application web pour réconcilier les ventes du restaurant **ChickNSter** :
+Application **navigateur** pour réconcilier les ventes du restaurant **ChickNSter** :
 on dépose les 4 fichiers Excel d'une journée et le système vérifie que
 **tout ce qui est encaissé correspond bien aux commandes**, avec les bons
 montants et les bons modes de paiement.
 
-## 🌐 Version en ligne (sans installation)
+**Aucune installation** : tout le calcul se fait dans le navigateur (les fichiers
+ne partent pas sur Internet).
 
-Le dossier [`docs/`](docs/) contient une version **100 % navigateur** : rien
-à installer, tout le calcul se fait sur ta machine (aucun fichier n'est
-envoyé sur Internet). Une fois GitHub Pages activé (voir plus bas), elle est
-accessible à :
+## Utilisation
 
-**https://anaslaghezali-ops.github.io/CNS/**
+1. Ouvrir [`docs/index.html`](docs/index.html) en local, ou le site GitHub Pages.
+2. Déposer les 4 fichiers Excel (le **POS** est obligatoire, les autres facultatifs).
+3. Cliquer sur **Lancer la réconciliation**.
+4. Consulter les anomalies, valider celles traitées, télécharger le rapport Excel.
 
-### Activer GitHub Pages (une seule fois)
+Redirection depuis la racine du dépôt : [`index.html`](index.html) → `docs/`.
 
-1. Sur GitHub, ouvre le dépôt → onglet **Settings**.
-2. Menu de gauche → **Pages**.
-3. Section **Build and deployment** → **Source** → choisis **GitHub Actions**.
-4. C'est tout : le site se déploie automatiquement (et se met à jour à chaque
-   nouveau commit sur la branche).
+## Version en ligne (GitHub Pages)
+
+**https://anaslaghezali-ops.github.io/CNS/** (après activation de Pages)
+
+1. GitHub → dépôt → **Settings** → **Pages**
+2. **Source** → **GitHub Actions**
+3. Le workflow déploie le dossier `docs/` (branche `Cursor` ou branche principale selon config CI)
 
 ---
 
@@ -54,49 +57,33 @@ accessible à :
 - 🔴 Commande **livrée absente** du POS (non tapée)
 - 🔴 **Mauvais mode de paiement** au POS
 - 🟠 **Numéro de commande mal saisi** (faute de frappe sur le n° de ticket)
-- 🟠 **Écart de montant**
+- 🟠 **Écart de montant** (Glovo W−AE vs POS, Site, etc.)
 - 🟠 Ticket POS **non rattachable** à une source
 - 🟠 Journée **non couverte** par le relevé NAPS (décalage de télécollecte)
 - 🔵 Écart **agrégé** de paiement (Glovo) · **saisie tardive** (> 10 min)
-
-## Installation
-
-```bash
-pip install -r requirements.txt
-```
-
-## Lancement
-
-```bash
-streamlit run app.py
-```
-
-Puis, dans le navigateur :
-1. Déposer les 4 fichiers Excel (le **POS** est obligatoire, les autres sont facultatifs).
-2. Cliquer sur **Lancer la réconciliation**.
-3. Consulter les écarts à l'écran et **télécharger le rapport Excel**.
-
-Le rapport Excel contient 3 feuilles : **Résumé**, **Anomalies**, et
-**POS annoté** (le fichier POS avec le canal détecté, le statut et le
-détail des incohérences, lignes surlignées).
 
 ## Structure du projet
 
 ```
 CNS/
-├── app.py                     # Interface web Streamlit
-├── reconciliation/
-│   ├── loaders.py             # Lecture robuste des 4 fichiers Excel
-│   ├── classify.py            # Classification des tickets POS par canal
-│   ├── reconcile.py           # Moteur de réconciliation
-│   └── report.py              # Génération du rapport Excel
-├── requirements.txt
+├── docs/                      # Application navigateur (moteur + UI + export Excel)
+│   ├── index.html
+│   ├── app.js
+│   ├── reconcile.js           # Moteur de réconciliation (JavaScript)
+│   └── style.css
+├── reconciliation/            # Moteur Python (parité métier, scripts diagnostic)
+│   ├── loaders.py
+│   ├── classify.py
+│   └── reconcile.py
+├── scripts/                   # Outils CLI (ex. diagnostic commande Glovo)
+├── requirements.txt           # pandas + openpyxl (scripts Python uniquement)
+├── index.html                 # Redirection vers docs/
 └── README.md
 ```
 
 > **Note sur les fichiers Glovo :** certains exports Glovo contiennent un
-> `styles.xml` invalide qui empêche leur ouverture. Le système le **répare
-> automatiquement** à la lecture.
+> `styles.xml` invalide qui empêche leur ouverture. Le lecteur du navigateur
+> (SheetJS) et le loader Python **réparent** automatiquement à la lecture.
 
 ## Confidentialité
 

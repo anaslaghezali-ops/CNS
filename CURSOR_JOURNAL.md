@@ -11,9 +11,9 @@
   le gérant travaille sur une seule branche.
 - **Ce journal** : chaque session de modification significative ajoute une entrée
   datée ci-dessous (règle métier, fichiers modifiés, raison, impact).
-- **Parité Python / JS** : le moteur existe en double —
-  `reconciliation/` (Streamlit) et `docs/reconcile.js` (navigateur). Toute règle
-  métier doit être appliquée **dans les deux**.
+- **Parité Python / JS** : l’app utilisée en production est **`docs/`** (navigateur).
+  Le package `reconciliation/` (Python) sert aux **scripts de diagnostic** et doit
+  rester aligné sur `docs/reconcile.js` pour les règles métier.
 
 ---
 
@@ -62,8 +62,6 @@ montant_glovo = Subtotal (W) − Discount Funded by you (AE)
 | `reconciliation/loaders.py` | Charge AE, calcule `amount` |
 | `reconciliation/reconcile.py` | Utilise `g["amount"]` au lieu de `g["subtotal"]` |
 | `docs/reconcile.js` | Idem + libellé financier « Glovo (W − AE) » |
-| `app.py` | Texte d'aide utilisateur |
-| `README.md` | Table des sources |
 
 **Impact observé** (fichiers test 5–10 août 2026) :
 
@@ -102,8 +100,7 @@ l'écart venait des commandes **Cash** ou **Online** (Bank Transfer au POS).
 | `docs/index.html` | Texte d'aide |
 | `docs/style.css` | `.fin-glovo-sub`, `.fin-total` |
 
-**Note** : réconciliation financière **navigateur uniquement** (pas encore dans
-Streamlit Python).
+**Note** : réconciliation financière dans **`docs/`** (navigateur).
 
 ---
 
@@ -281,6 +278,20 @@ montant différent) avec note si POS = W brut.
 
 ---
 
+### 2026-08-12 — Retrait Streamlit (app navigateur seule)
+
+**Demandé par** : gérant — plus d’usage de Streamlit.
+
+**Supprimé** : `app.py`, `reconciliation/report.py`, dépendance `streamlit` dans
+`requirements.txt`.
+
+**Conservé** : `docs/` (app production), `reconciliation/` (parité + scripts),
+export Excel via `docs/app.js`.
+
+**CI** : GitHub Pages déploie aussi sur push branche `Cursor`.
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :
@@ -300,9 +311,8 @@ Analyse sur fichiers réels (non versionnés) — pour référence future :
 | Lecture Excel | `reconciliation/loaders.py` | `docs/reconcile.js` (`loadPOS`, `loadGlovo`, …) |
 | Classification ticket POS | `reconciliation/classify.py` | `docs/reconcile.js` (`classifyTicket`) |
 | Rapprochement | `reconciliation/reconcile.py` | `docs/reconcile.js` (`reconcileSite`, `reconcileGlovo`, …) |
-| Export Excel | `reconciliation/report.py` | `docs/app.js` |
-| UI Streamlit | `app.py` | — |
-| UI navigateur | — | `docs/index.html`, `docs/app.js` |
+| Export Excel | — | `docs/app.js` |
+| UI | — | `docs/index.html`, `docs/app.js` |
 | Déploiement Pages | — | `.github/workflows/deploy-pages.yml` |
 
 ---

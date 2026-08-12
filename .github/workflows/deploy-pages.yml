@@ -2,7 +2,7 @@ name: Déployer ChickNSter sur GitHub Pages
 
 on:
   push:
-    branches: ["claude/chicknster-reconciliation-system-460chx"]
+    branches: ["Cursor", "claude/chicknster-reconciliation-system-460chx"]
   workflow_dispatch:
 
 permissions:
