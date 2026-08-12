@@ -853,6 +853,53 @@
         payment_pos: p.payment_type, payment_source: exp }));
     });
 
+    // Phase 2b : Glovo tapé sous SP/EMP ou libre (bon paiement + montant + fenêtre proche).
+    // Avant saisie tardive / écart montant — ex. Online 190 DH à 21:55 tapée « Sp235 ».
+    var wrongNameUsed = new Set();
+    var wrongPairs = [];
+    delivered.forEach(function (g, gi) {
+      if (matched.has(gi) || !g.received_at) return;
+      var exp = GLOVO_PAYMENT_MAP[g.payment_type];
+      pos.forEach(function (p) {
+        if (p.channel === CH_GLOVO || p.channel === CH_SITE) return;
+        if (p.matched_glovo_order) return;
+        if (wrongNameUsed.has(p.ticket_no)) return;
+        if (p.payment_type !== exp) return;
+        if (!amountMatch(g, p)) return;
+        if (!inWindow(g, p, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN)) return;
+        var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
+        wrongPairs.push({ gi: gi, p: p, gap: gap, exp: exp });
+      });
+    });
+    wrongPairs.sort(function (a, b) { return a.gap - b.gap; });
+    var wrongMatchedG = new Set();
+    wrongPairs.forEach(function (pr) {
+      if (wrongMatchedG.has(pr.gi) || wrongNameUsed.has(pr.p.ticket_no)) return;
+      wrongMatchedG.add(pr.gi);
+      wrongNameUsed.add(pr.p.ticket_no);
+      matched.add(pr.gi);
+      var g = delivered[pr.gi], p = pr.p, exp = pr.exp;
+      markGlovoPosMatch(g, p);
+      p.channel = CH_GLOVO;
+      p.channel_match = "glovo_wrong_name";
+      anomalies.push(posAnomaly(p, {
+        source: "Glovo", severity: "moyenne",
+        type: "Numéro Glovo mal saisi (SP/EMP ou libre)",
+        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
+          g.amount.toFixed(0) + " DH" +
+          (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") +
+          ") introuvable sous ce n° — le ticket POS " + p.ticket_name +
+          " (à " + hhmm(p.datetime) + ", " + p.payment_type + ", " +
+          p.total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min) correspond " +
+          "(même montant et mode paiement). Le caissier a probablement tapé « " +
+          p.ticket_name + " » au lieu du n° Glovo.",
+        source_ref: g.order_id,
+        amount_pos: p.total, amount_source: g.amount,
+        payment_pos: p.payment_type,
+        payment_source: exp,
+      }));
+    });
+
     // Phase 3 : saisie tardive (±120 min, bon paiement, montant identique).
     assignGlobalList(delivered, matched, isExp, 120, 120, true, false).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi];
@@ -1389,8 +1436,28 @@
         }
         return;
       }
-      // Commande absente : suggestion par contenu + heure (info seulement)
-      if (g && !p && (a.type === "Commande Glovo absente du POS") && g.order_items && g.received_at) {
+      // Commande absente : suggestion montage+paiement+heure, puis contenu produits
+      if (g && !p && (a.type === "Commande Glovo absente du POS") && g.received_at) {
+        var expPay = GLOVO_PAYMENT_MAP[g.payment_type];
+        var bestWrong = null, bestGap = 1e9;
+        pos.forEach(function (px) {
+          if (px.channel === CH_GLOVO || px.channel === CH_SITE) return;
+          if (px.matched_glovo_order) return;
+          if (px.payment_type !== expPay) return;
+          if (!px.datetime || isNaN(px.total) || isNaN(g.amount)) return;
+          if (Math.abs(px.total - g.amount) > AMOUNT_TOL) return;
+          var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
+          if (gap > WINDOW_AFTER_MIN) return;
+          if (gap < bestGap) { bestGap = gap; bestWrong = px; }
+        });
+        if (bestWrong) {
+          a.detail += " [Suggestion : ticket " + bestWrong.ticket_name + " ligne " +
+            bestWrong.row + " à " + hhmm(bestWrong.datetime) +
+            " — même montant+paiement (" + expPay + ", +" + bestGap.toFixed(0) +
+            " min), probable mauvais n° SP/EMP]";
+          return;
+        }
+        if (!g.order_items) return;
         var bestP = null, bestScore = 0;
         pos.forEach(function (px) {
           if (px.channel !== CH_GLOVO || !px.datetime || !px.designations) return;

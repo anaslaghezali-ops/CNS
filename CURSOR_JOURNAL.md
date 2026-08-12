@@ -706,6 +706,16 @@ appariement montant+heure si n° absent · ligne détail « À récupérer : Hib
 
 ---
 
+### 2026-08-12 — Suggestion Glovo : heure du ticket POS proposé
+
+**Demandé par** : gérant — suggestion « ticket 50 ligne 1301 » sans l’heure POS.
+
+**Fix** : `à HH:MM` ajouté dans le texte de suggestion (ex. `ligne 1301 à 21:42`).
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
