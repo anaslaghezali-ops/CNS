@@ -411,6 +411,22 @@ ou une similarité produits qui échouait (format Glovo `Order Items` avec croch
 
 ---
 
+### 2026-08-12 — Site emporter : pas d’anomalie « statut non livré »
+
+**Demandé par** : gérant (ex. commande `57388` emporter Fermée + Cash au POS).
+
+**Règle** : les commandes **à emporter** (col H) n’ont pas `DELIVERED` col L — statut
+**Fermée** = normale. Elles doivent être au POS en Cash ou Credit card.
+
+**Changements** :
+- `siteOrderCountsInReconciliation` : livraison = DELIVERED · emporter = Fermée
+- Réconciliation site + total financier incluent les emporter Fermées
+- Plus d’anomalie « statut non livré » pour les emporter
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/reconcile.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
