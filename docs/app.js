@@ -225,9 +225,13 @@
 
   function enrichFinCashCollect(fin, viewState) {
     if (!fin || !fin.cash_to_collect || !viewState || !viewState.pos) return fin;
+    // Anomalies validées exclues : elles ne doivent plus désigner de caissier.
+    var active = (viewState.anomalies || []).filter(function (a) {
+      return !isValidated(a.id);
+    });
     CNS.finalizeCashToCollectUsers(
       fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.site,
-      viewState.naps, CNS.listPosDates(viewState.pos), viewState.anomalies || []);
+      viewState.naps, CNS.listPosDates(viewState.pos), active);
     CNS.applyCashUserAssignments(fin.cash_to_collect, state.cashUserAssignments || {});
     return fin;
   }
@@ -670,7 +674,7 @@
             "✅ <b>Totaux alignés</b> — écarts d'appariement seulement (voir section ci-dessous).</div>";
         }
       }
-      var rowCls = l.isTotal ? "fin-total" : (l.group === "glovo" ? "fin-glovo-sub" : "");
+      var rowCls = l.isTotal ? "fin-total" : (l.group ? "fin-glovo-sub" : "");
       var contribs = l.lineKey ? CNS.getFinancialContributors(l.lineKey, activeAnomalies()) : [];
       var detailCell = "";
       if (l.lineKey) {

@@ -891,6 +891,45 @@ sur 2 exécutions consécutives ; non-régression POS+NAPS+Site (174 anomalies, 
 
 ---
 
+### 2026-08-12 — Écart visible jusqu'à validation + Site scindé en 3 lignes
+
+**Demandé par** : gérant — (1) « dans la réconciliation financière je dois toujours avoir
+les 190 jusqu'à ce que je valide l'anomalie » ; (2) scinder la partie **Site** comme Glovo
+(Virement / CB / Espèces) pour montrer l'anomalie qui crée l'écart de 130 DH.
+
+**Règle 1 — le canal du ticket n'est plus corrigé automatiquement** : un ticket tapé sous
+un mauvais nom garde son canal (SP&EMP), donc l'écart financier reste visible. Il porte
+`wrong_name_source` / `wrong_name_order` :
+- **nombre** de tickets Glovo : le ticket compte (la commande a bien été saisie) → plus
+  d'anomalie « Écart nombre » ;
+- **montants** : l'écart persiste, et `financialAdjustment` le neutralise à la validation
+  (`Numéro Glovo mal saisi au POS` / `Numéro de ticket mal saisi (Glovo|Site)` → `+ap`
+  sur la bonne sous-ligne).
+
+**Règle 2 — trois lignes Site** (comme Glovo) :
+| Ligne | Côté POS | Côté source |
+|---|---|---|
+| `site_delivery` — Livraison | POS Site « Bank Transfer » | Site livrées (col L) |
+| `site_counter` — Emporter (comptoir) | POS Site « Cash + Credit card » | Site emporter Fermée |
+| `site` — Total | POS tickets Site | livrées + emporter |
+
+Nouveaux champs d'ajustement : `site_pos_bt`, `site_pos_counter`, `site_src_delivery`,
+`site_src_counter` (+ helpers `siteAdjPos` / `siteAdjSrc`, champ `site_kind` sur les
+anomalies Site). « Mode de paiement incorrect (commande à emporter) » **déplace** le
+montant de la ligne Livraison vers la ligne Emporter à la validation.
+
+**Cohérence cash à collecter** : les contributions par utilisateur sont filtrées sur les
+lignes qui ont encore quelque chose à collecter, et `enrichFinCashCollect` ignore les
+anomalies validées → 130 DH / Hiba avant validation, 0 DH / table vide après.
+
+**Vérifié** (19 juil.) : Emporter +130 → 0 et Livraison −215 → −85 après validation ;
+Glovo Online POS 7155 → 7345 après validation ; non-régression 174 anomalies, 26 jours,
+résultats idempotents.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js` (version `2026-08-12 · 8`)
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

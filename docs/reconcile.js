@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-08-12 · 7";
+  var BUILD = "2026-08-12 · 8";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
@@ -215,6 +215,9 @@
       payment_pos: o.payment_pos || "", payment_source: o.payment_source || "",
       file: o.file || "", row: o.row == null ? "" : o.row,
       when: o.when || (o.pos_datetime ? dtFull(o.pos_datetime) : ""),
+      // « delivery » (col L) ou « counter » (emporter Fermée) : choisit la sous-ligne
+      // Site touchée par l'ajustement financier quand l'anomalie est validée.
+      site_kind: o.site_kind || "",
     };
     a.id = anomalyId(a);
     return a;
@@ -518,6 +521,7 @@
             detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
                     p.total + " DH (POS).",
             source_ref: sid,
+            site_kind: siteOrderIsTakeout(o) ? "counter" : "delivery",
             amount_pos: p.total, amount_source: o.order_total }));
         }
       }
@@ -898,8 +902,10 @@
         wrongNameUsed.add(pr.p.ticket_no);
         var g = delivered[pr.gi], p = pr.p;
         markGlovoPosMatch(g, p);
-        p.channel = CH_GLOVO;
-        p.channel_match = "glovo_wrong_name";
+        // Le canal du ticket n'est PAS corrigé : l'écart financier doit rester
+        // visible tant que le gérant n'a pas validé l'anomalie.
+        p.wrong_name_source = "Glovo";
+        p.wrong_name_order = String(g.order_id);
         anomalies.push(posAnomaly(p, {
           source: "Glovo", severity: "haute",
           type: "Numéro Glovo mal saisi au POS",
@@ -1294,6 +1300,7 @@
           type: "Commande livrée absente du POS",
           detail: "Commande site " + d.id + " livrée mais introuvable dans le POS.",
           source_ref: String(d.id), amount_source: d.amount,
+          site_kind: siteOrderIsTakeout(d.o) ? "counter" : "delivery",
           file: "Site", row: d.o.row, when: d.ref ? dtFull(d.ref) : "" }));
       } else {
         anomalies.push(anomaly({ source: "Glovo", severity: "haute",
@@ -1354,7 +1361,11 @@
     var delivered = glovo.filter(function (g) {
       return (g.status || "").toLowerCase() === "delivered";
     });
-    var posGlovo = pos.filter(function (p) { return p.channel === CH_GLOVO; });
+    // Un ticket tapé sous un mauvais nom compte comme ticket Glovo pour le NOMBRE
+    // (la commande a bien été saisie), même si son canal reste inchangé.
+    var posGlovo = pos.filter(function (p) {
+      return p.channel === CH_GLOVO || p.wrong_name_source === "Glovo";
+    });
     var gTotal = delivered.length;
     var pTotal = posGlovo.length;
     var gOnline = delivered.filter(function (g) { return g.payment_type === "Online"; }).length;
@@ -1714,8 +1725,9 @@
       var src = pr.isGlovo ? "Glovo" : "Site";
       var srcId = pr.isGlovo ? pr.g.order_id : pr.o.identifiant;
       if (pr.isGlovo) markGlovoPosMatch(pr.g, p);
-      p.channel = pr.isGlovo ? CH_GLOVO : CH_SITE;
-      p.channel_match = pr.isGlovo ? "glovo_wrong_name" : "site_wrong_name";
+      // Canal inchangé : l'écart financier reste visible jusqu'à validation.
+      p.wrong_name_source = src;
+      p.wrong_name_order = String(srcId);
 
       var proofs = [pr.sameAmount
         ? "même montant (" + pr.srcAmt.toFixed(2) + " DH)"
@@ -2149,6 +2161,8 @@
   function resetReconcileState(pos, glovo) {
     (pos || []).forEach(function (p) {
       delete p.matched_glovo_order;
+      delete p.wrong_name_source;
+      delete p.wrong_name_order;
       delete p._naps_split_cc;
       delete p._naps_split_row;
       delete p.statut;
@@ -2340,6 +2354,26 @@
     if (site) site.filter(siteOrderCountsInReconciliation)
       .forEach(function (o) { if (!isNaN(o.order_total)) siteL += o.order_total; });
 
+    function sumPosSitePay(pay) {
+      return pos.reduce(function (a, p) {
+        if (p.channel !== CH_SITE) return a;
+        return a + (allocatePosPaymentAmounts(p)[pay] || 0);
+      }, 0);
+    }
+    var posSiteBT = sumPosSitePay("Bank Transfer");
+    var posSiteCash = sumPosSitePay("Cash");
+    var posSiteCC = sumPosSitePay("Credit card");
+    // Emporter site = payé au comptoir (Cash ou CB) — pas Bank Transfer.
+    var posSiteCounter = posSiteCash + posSiteCC;
+    var siteSrcDelivery = 0, siteSrcCounter = 0;
+    if (site) {
+      site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
+        if (isNaN(o.order_total)) return;
+        if (siteOrderIsTakeout(o)) siteSrcCounter += o.order_total;
+        else siteSrcDelivery += o.order_total;
+      });
+    }
+
     var lines = [];
     if (naps) lines.push({
       lineKey: "naps", source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
@@ -2381,31 +2415,30 @@
         note: totalNote,
       });
     }
-    if (site) lines.push({
-      lineKey: "site", source: "🌐 Site", pos_label: "POS tickets Site",
-      pos: posSite, src_label: "Site (livrées col L + emporter Fermée)", src: siteL,
-      ecart: siteL - posSite,
-    });
-
-    var payment_breakdown = buildPaymentBreakdown(byPayment, matrix);
-
-    var posSiteCash = pos.reduce(function (a, p) {
-      if (p.channel !== CH_SITE) return a;
-      return a + (allocatePosPaymentAmounts(p)["Cash"] || 0);
-    }, 0);
-    var posSiteCC = pos.reduce(function (a, p) {
-      if (p.channel !== CH_SITE) return a;
-      return a + (allocatePosPaymentAmounts(p)["Credit card"] || 0);
-    }, 0);
-  // Emporter site = payé au comptoir (Cash ou CB) — pas Bank Transfer.
-    var posSiteCounter = posSiteCash + posSiteCC;
-    var siteCashSrc = 0;
     if (site) {
-      site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
-        if (!siteOrderIsTakeout(o)) return;
-        if (!isNaN(o.order_total)) siteCashSrc += o.order_total;
+      var siteTotalNote = "Côté POS : Total = Livraison (Bank Transfer) + Emporter (Cash + CB).";
+      lines.push({
+        lineKey: "site_delivery", source: "🌐 Site — Livraison",
+        pos_label: "POS Site « Bank Transfer »", pos: posSiteBT,
+        src_label: "Site livrées (col L)", src: siteSrcDelivery,
+        ecart: siteSrcDelivery - posSiteBT, group: "site",
+      });
+      lines.push({
+        lineKey: "site_counter", source: "🌐 Site — Emporter (comptoir)",
+        pos_label: "POS Site « Cash + Credit card »", pos: posSiteCounter,
+        src_label: "Site emporter Fermée", src: siteSrcCounter,
+        ecart: siteSrcCounter - posSiteCounter, group: "site",
+        note: "Emporter payé au comptoir : « Bank Transfer » est interdit.",
+      });
+      lines.push({
+        lineKey: "site", source: "🌐 Site — Total", pos_label: "POS tickets Site",
+        pos: posSite, src_label: "Site (livrées col L + emporter Fermée)", src: siteL,
+        ecart: siteL - posSite, group: "site", isTotal: true, note: siteTotalNote,
       });
     }
+
+    var payment_breakdown = buildPaymentBreakdown(byPayment, matrix);
+    var siteCashSrc = siteSrcCounter;
 
     var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCounter, siteCashSrc,
       posSiteCash, posSiteCC);
@@ -2454,6 +2487,14 @@
     }
 
     // Emporter : comparer le fichier site au POS comptoir (Cash + CB), pas Cash seul.
+    // La ligne « site_counter » porte déjà les ajustements des anomalies validées.
+    var siteCounterLine = lines.filter(function (l) {
+      return l.lineKey === "site_counter";
+    })[0];
+    if (siteCounterLine) {
+      siteCounterPos = siteCounterLine.pos;
+      siteCashSrc = siteCounterLine.src;
+    }
     var siteEcart = siteCashSrc - siteCounterPos;
     if (Math.abs(siteEcart) >= 0.5 || siteCashSrc > 0 || siteCounterPos > 0) {
       var posDetail = "";
@@ -2866,6 +2907,13 @@
     var napsAnom = collectNapsTpeFromAnomalies(pos, anomalies);
     if (napsAnom.length) contribs = contribs.concat(napsAnom);
     else contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
+    // Cohérence avec le total affiché : si une ligne n'a plus rien à collecter
+    // (anomalie validée → écart neutralisé), ses contributions disparaissent aussi.
+    var activeLines = {};
+    (cc.items || []).forEach(function (it) {
+      if (Math.abs(it.collect_amount || 0) >= 0.5) activeLines[it.lineKey] = true;
+    });
+    contribs = contribs.filter(function (c) { return activeLines[c.lineKey]; });
     stampCashContributions(contribs);
     cc.ticket_contributions = contribs;
     cc.by_user = aggregateCashCollectByUser(contribs);
@@ -3007,8 +3055,22 @@
       glovo_pos_bt: 0, glovo_pos_cash: 0,
       glovo_src_online: 0, glovo_src_cash: 0,
       site_pos: 0, site_src: 0,
+      site_pos_bt: 0, site_pos_counter: 0,
+      site_src_delivery: 0, site_src_counter: 0,
       pos_cc: 0, naps_src: 0,
     };
+  }
+  /** Côté POS Site : ventile sur « Livraison » (BT) ou « Emporter » (Cash/CB). */
+  function siteAdjPos(adj, a, amount) {
+    if (a.payment_pos === "Bank Transfer") adj.site_pos_bt += amount;
+    else adj.site_pos_counter += amount;
+    adj.site_pos += amount;
+  }
+  /** Côté source Site : livraison (col L) ou emporter (Fermée). */
+  function siteAdjSrc(adj, a, amount) {
+    if (a.site_kind === "counter") adj.site_src_counter += amount;
+    else adj.site_src_delivery += amount;
+    adj.site_src += amount;
   }
   function financialAdjustment(a) {
     var adj = emptyAdj();
@@ -3018,7 +3080,7 @@
     if (as == null || isNaN(as)) as = 0;
 
     if (t === "Commande livrée absente du POS") {
-      adj.site_src -= as;
+      siteAdjSrc(adj, a, -as);
     } else if (t === "Commande Glovo absente du POS") {
       if (a.payment_source === "Cash") adj.glovo_src_cash -= as;
       else adj.glovo_src_online -= as;
@@ -3026,9 +3088,21 @@
       if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;
       else adj.glovo_pos_bt -= ap;
     } else if (t === "Ticket Site au POS sans commande correspondante") {
-      adj.site_pos -= ap;
+      siteAdjPos(adj, a, -ap);
     } else if (t === "Commande site au POS — statut non livré") {
-      adj.site_pos -= ap;
+      siteAdjPos(adj, a, -ap);
+    } else if (t === "Numéro Glovo mal saisi au POS" ||
+               t === "Numéro de ticket mal saisi (Glovo)") {
+      // Le ticket existe au POS mais hors canal Glovo : valider = le compter côté POS.
+      if (a.payment_pos === "Cash") adj.glovo_pos_cash += ap;
+      else adj.glovo_pos_bt += ap;
+    } else if (t === "Numéro de ticket mal saisi (Site)") {
+      siteAdjPos(adj, a, ap);
+    } else if (t === "Mode de paiement incorrect (commande à emporter)") {
+      // Emporter encaissé au comptoir mais tapé « Bank Transfer » : déplacer le
+      // montant de la ligne Livraison vers la ligne Emporter.
+      adj.site_pos_bt -= ap;
+      adj.site_pos_counter += ap;
     } else if (t === "Commande Glovo Online absente du POS (écart financier)") {
       adj.glovo_src_online -= as;
     } else if (t === "Commande Glovo Cash absente du POS (écart financier)") {
@@ -3042,8 +3116,8 @@
     } else if (t === "Transaction TPE absente du POS") {
       adj.naps_src -= as;
     } else if (t === "Écart de montant" && a.source === "Site") {
-      adj.site_src -= as;
-      adj.site_pos -= ap;
+      siteAdjSrc(adj, a, -as);
+      siteAdjPos(adj, a, -ap);
     } else if (t === "Écart de montant" && a.source === "Glovo") {
       if (a.payment_source === "Cash") {
         adj.glovo_src_cash -= as;
@@ -3058,7 +3132,7 @@
         if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;
         else adj.glovo_pos_bt -= ap;
       } else if (a.source === "Site") {
-        adj.site_pos -= ap;
+        siteAdjPos(adj, a, -ap);
       }
     } else if (t === "Mode de paiement incorrect" && a.source === "Glovo" && ap) {
       var exp = a.payment_source, got = a.payment_pos;
@@ -3079,6 +3153,8 @@
       return (adj.glovo_src_online + adj.glovo_src_cash) -
              (adj.glovo_pos_bt + adj.glovo_pos_cash);
     }
+    if (lineKey === "site_delivery") return adj.site_src_delivery - adj.site_pos_bt;
+    if (lineKey === "site_counter") return adj.site_src_counter - adj.site_pos_counter;
     if (lineKey === "site") return adj.site_src - adj.site_pos;
     if (lineKey === "naps") return adj.naps_src - adj.pos_cc;
     return 0;
@@ -3117,6 +3193,12 @@
       } else if (l.lineKey === "glovo_total") {
         pos += adj.glovo_pos_bt + adj.glovo_pos_cash;
         src += adj.glovo_src_online + adj.glovo_src_cash;
+      } else if (l.lineKey === "site_delivery") {
+        pos += adj.site_pos_bt;
+        src += adj.site_src_delivery;
+      } else if (l.lineKey === "site_counter") {
+        pos += adj.site_pos_counter;
+        src += adj.site_src_counter;
       } else if (l.lineKey === "site") {
         pos += adj.site_pos;
         src += adj.site_src;
