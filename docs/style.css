@@ -184,4 +184,28 @@ tbody tr:hover { background: #fbfbfb; }
 .pay-split .split-amt { font-weight: 600; text-align: right; }
 .pay-split.zero { opacity: .45; }
 
+.cash-collect-block {
+  margin: 20px 0; padding: 16px 18px; background: #fff8e8;
+  border: 2px solid #d4a574; border-radius: 10px;
+}
+.cash-collect-block h2 { margin: 0 0 8px; color: #8b5a2b; font-size: 1.15rem; }
+.cash-collect-summary {
+  display: flex; flex-wrap: wrap; gap: 20px; margin: 14px 0;
+  padding: 12px 14px; background: #fff; border-radius: 8px; border: 1px solid #e8d4b8;
+}
+.cash-collect-summary .cc-item { min-width: 140px; }
+.cash-collect-summary .cc-label { font-size: .82rem; color: #666; }
+.cash-collect-summary .cc-value { font-size: 1.2rem; font-weight: 800; }
+.cash-collect-summary .cc-highlight { color: #c45c00; }
+.cash-collect-summary .cc-ok { color: var(--ok-b); }
+.cash-collect-items { margin-top: 12px; }
+.cash-collect-item {
+  padding: 10px 12px; margin-bottom: 8px; background: #fff;
+  border: 1px solid #e8d4b8; border-radius: 8px; font-size: .9rem;
+}
+.cash-collect-item .cc-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+.cash-collect-item .cc-ecart-pos { color: #c45c00; font-weight: 700; }
+.cash-collect-item .cc-ecart-neg { color: #666; font-weight: 700; }
+.cash-collect-item .cc-hint { font-size: .82rem; color: #777; margin-top: 6px; }
+
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }

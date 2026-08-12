@@ -272,6 +272,11 @@
     if (counts.n_naps_pairing_ok) {
       metrics.push(["✅ TPE totaux OK (appariement)", counts.n_naps_pairing_ok]);
     }
+    var adjFin = getAdjustedFinancial();
+    if (adjFin && adjFin.cash_to_collect && adjFin.cash_to_collect.net_to_collect > 0) {
+      metrics.push(["💰 Cash à collecter", "+" +
+        adjFin.cash_to_collect.net_to_collect.toLocaleString("fr-FR") + " DH"]);
+    }
     document.getElementById("metrics").innerHTML = metrics.map(function (m) {
       return '<div class="metric"><div class="label">' + m[0] +
              '</div><div class="value">' + m[1] + "</div></div>";
@@ -308,6 +313,7 @@
     }).join("");
 
     renderPaymentBreakdown(vs.summary.financial);
+    renderCashToCollect(getAdjustedFinancial());
     renderFinancial(getAdjustedFinancial());
     renderNapsBalanced();
 
@@ -356,6 +362,57 @@
         "<span class='pay-total'>" + fmtDH(pay.total) + "</span>" +
         "</div>" + splits + "</div>";
     }).join("");
+  }
+
+  function renderCashToCollect(fin) {
+    var section = document.getElementById("cash-collect-section");
+    var content = document.getElementById("cash-collect-content");
+    if (!fin || !fin.cash_to_collect) {
+      section.classList.add("hidden");
+      content.innerHTML = "";
+      return;
+    }
+    var cc = fin.cash_to_collect;
+    section.classList.remove("hidden");
+
+    var netCls = cc.net_to_collect > 0 ? "cc-highlight" :
+      (cc.net_to_collect === 0 ? "cc-ok" : "");
+    var netSign = cc.net_to_collect > 0 ? "+" : "";
+
+    var html = '<div class="cash-collect-summary">' +
+      '<div class="cc-item"><div class="cc-label">Cash saisi au POS (total)</div>' +
+      '<div class="cc-value">' + fmtDH(cc.pos_cash_recorded) + "</div></div>" +
+      '<div class="cc-item"><div class="cc-label">À collecter des caissiers</div>' +
+      '<div class="cc-value ' + netCls + '">' + netSign + fmtDH(cc.net_to_collect) + "</div></div>" +
+      '<div class="cc-item"><div class="cc-label">Cash réel attendu en caisse</div>' +
+      '<div class="cc-value cc-highlight">' + fmtDH(cc.cash_expected_physical) + "</div></div>" +
+      "</div>";
+
+    if (cc.net_to_collect <= 0 && cc.total_to_collect <= 0) {
+      html += "<p class='muted' style='margin:8px 0 0'>✅ Rien à collecter en plus du POS — " +
+        "Cash aligné avec Glovo Cash et Site emporter.</p>";
+    } else if (cc.net_to_collect > 0) {
+      html += "<p class='muted' style='margin:8px 0 0'>" +
+        "Vous devez récupérer <b>" + fmtDH(cc.net_to_collect) + "</b> en plus de ce qui est " +
+        "affiché au POS Cash (<b>" + fmtDH(cc.pos_cash_recorded) + "</b>) → " +
+        "cash physique attendu : <b>" + fmtDH(cc.cash_expected_physical) + "</b>.</p>";
+    }
+
+    var detail = cc.items.filter(function (it) { return Math.abs(it.ecart) >= 0.5; });
+    if (detail.length) {
+      html += '<div class="cash-collect-items">' + detail.map(function (it) {
+        var ecartCls = it.ecart > 0 ? "cc-ecart-pos" : "cc-ecart-neg";
+        var sign = it.ecart > 0 ? "+" : "";
+        return '<div class="cash-collect-item"><div class="cc-row"><b>' +
+          escapeHtml(it.label) + "</b><span>" + escapeHtml(it.pos_label) + " : <b>" +
+          fmtDH(it.pos) + "</b></span><span>" + escapeHtml(it.src_label) + " : <b>" +
+          fmtDH(it.src) + "</b></span><span class='" + ecartCls + "'>Écart : " +
+          sign + fmtDH(it.ecart) + "</span></div>" +
+          (it.hint ? "<div class='cc-hint'>" + escapeHtml(it.hint) + "</div>" : "") +
+          "</div>";
+      }).join("") + "</div>";
+    }
+    content.innerHTML = html;
   }
 
   function renderFinancial(fin) {
@@ -775,6 +832,24 @@
       return rows;
     }
 
+    function buildCashCollectRows(runFin) {
+      if (!runFin || !runFin.cash_to_collect) return [];
+      var cc = runFin.cash_to_collect;
+      var rows = [
+        ["Cash à collecter"],
+        ["Cash saisi au POS (total)", cc.pos_cash_recorded],
+        ["À collecter des caissiers (net)", cc.net_to_collect],
+        ["Cash réel attendu en caisse", cc.cash_expected_physical],
+        [],
+        ["Détail par source", "POS", "Source", "Écart (source − POS)"],
+      ];
+      cc.items.forEach(function (it) {
+        if (Math.abs(it.ecart) < 0.5) return;
+        rows.push([it.label, Math.round(it.pos), Math.round(it.src), Math.round(it.ecart)]);
+      });
+      return rows;
+    }
+
     function toRow(a, validated) {
       return {
         "Validée": validated ? "Oui" : "Non",
@@ -801,6 +876,10 @@
       if (fin.payment_breakdown) {
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
           buildPaymentBreakdownRows(fin)), "Totaux paiement");
+      }
+      if (fin.cash_to_collect) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+          buildCashCollectRows(fin)), "Cash à collecter");
       }
     }
 
@@ -849,6 +928,10 @@
           if (dayFin.payment_breakdown) {
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
               buildPaymentBreakdownRows(dayFin)), sheetSafe(dayLabel + " Paiements"));
+          }
+          if (dayFin.cash_to_collect) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+              buildCashCollectRows(dayFin)), sheetSafe(dayLabel + " Cash"));
           }
         }
         appendAnomalySheets(dayRun, dayLabel);

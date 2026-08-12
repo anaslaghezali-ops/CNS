@@ -479,6 +479,20 @@ avec ventilation par canal sous chaque mode :
 
 ---
 
+### 2026-08-12 — Cash à collecter (écarts Cash Glovo / Site emporter)
+
+**Demandé par** : gérant — savoir combien récupérer des caissiers en plus du Cash POS
+(ex. Glovo Cash +5 DH = 5 DH à collecter au-delà du POS).
+
+**Règle** : `Cash à collecter = écarts positifs (source − POS)` sur Glovo Cash et Site emporter Cash.
+`Cash réel attendu = total Cash POS + net à collecter`.
+
+**UI** : section orange sous totaux paiement + métrique en tête si &gt; 0. Export Excel.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

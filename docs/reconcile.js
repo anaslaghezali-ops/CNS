@@ -1563,8 +1563,77 @@
 
     var payment_breakdown = buildPaymentBreakdown(byPayment, matrix);
 
+    var posSiteCash = pos.reduce(function (a, p) {
+      return a + (p.channel === CH_SITE && p.payment_type === "Cash" && !isNaN(p.total) ? p.total : 0);
+    }, 0);
+    var siteCashSrc = 0;
+    if (site) {
+      site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
+        if (!siteOrderIsTakeout(o)) return;
+        if (!isNaN(o.order_total)) siteCashSrc += o.order_total;
+      });
+    }
+
+    var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCash, siteCashSrc);
+
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines,
-             payment_breakdown: payment_breakdown };
+             payment_breakdown: payment_breakdown,
+             site_cash_pos: posSiteCash, site_cash_src: siteCashSrc,
+             cash_to_collect: cash_to_collect };
+  }
+
+  /**
+   * Cash à récupérer des caissiers : écarts positifs source − POS sur les lignes Cash
+   * (Glovo Cash, Site emporter Cash). Écart + = la source encaisse plus que le POS.
+   */
+  function buildCashToCollect(lines, byPayment, siteCashPos, siteCashSrc) {
+    var items = [];
+    var totalCollect = 0, totalOver = 0;
+
+    function pushItem(item) {
+      items.push(item);
+      if (item.ecart > 0.5) totalCollect += item.ecart;
+      else if (item.ecart < -0.5) totalOver += -item.ecart;
+    }
+
+    var glovoLine = lines.filter(function (l) { return l.lineKey === "glovo_cash"; })[0];
+    if (glovoLine) {
+      pushItem({
+        lineKey: "glovo_cash",
+        label: glovoLine.source,
+        pos_label: glovoLine.pos_label,
+        src_label: glovoLine.src_label,
+        pos: glovoLine.pos,
+        src: glovoLine.src,
+        ecart: glovoLine.ecart,
+        hint: "Glovo Cash (W − AE) > POS Glovo Cash : les livreurs ont encaissé plus que saisi au POS.",
+      });
+    }
+
+    var siteEcart = siteCashSrc - siteCashPos;
+    if (Math.abs(siteEcart) >= 0.5 || siteCashSrc > 0 || siteCashPos > 0) {
+      pushItem({
+        lineKey: "site_cash",
+        label: "🌐 Site — Cash (emporter)",
+        pos_label: "POS Site « Cash »",
+        src_label: "Site emporter Fermée",
+        pos: siteCashPos,
+        src: siteCashSrc,
+        ecart: siteEcart,
+        hint: "Commandes site à emporter payées en cash au comptoir — écart positif = sous-saisie POS.",
+      });
+    }
+
+    var posCash = byPayment["Cash"] || 0;
+    var net = totalCollect - totalOver;
+    return {
+      pos_cash_recorded: Math.round(posCash),
+      total_to_collect: Math.round(totalCollect),
+      total_over_recorded: Math.round(totalOver),
+      net_to_collect: Math.round(net),
+      cash_expected_physical: Math.round(posCash + net),
+      items: items,
+    };
   }
 
   /** Totaux POS par mode de paiement avec split canal (Glovo / SP&EMP / Site). */
@@ -1757,7 +1826,10 @@
     });
     return { pays: fin.pays, by_payment: fin.by_payment, matrix: fin.matrix,
              lines: lines, adjustments_applied: true,
-             payment_breakdown: fin.payment_breakdown };
+             payment_breakdown: fin.payment_breakdown,
+             site_cash_pos: fin.site_cash_pos, site_cash_src: fin.site_cash_src,
+             cash_to_collect: buildCashToCollect(lines, fin.by_payment,
+               fin.site_cash_pos || 0, fin.site_cash_src || 0) };
   }
 
   function annotate(pos, anomalies) {
