@@ -145,6 +145,25 @@
   function dtFull(d) {
     return d ? dateKey(d) + " " + hhmm(d) : "";
   }
+  function roundDH(v) {
+    if (v == null || isNaN(v)) return null;
+    return Math.round(v);
+  }
+  /** Ajoute le(s) montant(s) au détail si absents du texte. */
+  function detailWithAmounts(detail, amount_pos, amount_source) {
+    var d = detail || "";
+    var parts = [];
+    var ap = roundDH(amount_pos), as = roundDH(amount_source);
+    if (ap != null && (d.indexOf(String(ap)) < 0 || !/DH/i.test(d))) {
+      parts.push(ap + " DH POS");
+    }
+    if (as != null && d.indexOf(String(as)) < 0) {
+      parts.push(as + " DH source");
+    }
+    if (!parts.length) return d;
+    return d + (d ? " — " : "") + parts.join(" · ");
+  }
+
   function anomalyId(a) {
     return [
       a.source, a.type, a.ticket_name || "", a.pos_ticket_no || "",
@@ -160,7 +179,8 @@
       source: o.source, severity: o.severity, type: o.type,
       ticket_name: o.ticket_name || "", pos_ticket_no: o.pos_ticket_no || "",
       pos_datetime: o.pos_datetime || null,
-      source_ref: o.source_ref || "", detail: o.detail,
+      source_ref: o.source_ref || "",
+      detail: detailWithAmounts(o.detail, o.amount_pos, o.amount_source),
       amount_pos: o.amount_pos == null ? null : o.amount_pos,
       amount_source: o.amount_source == null ? null : o.amount_source,
       payment_pos: o.payment_pos || "", payment_source: o.payment_source || "",
@@ -185,6 +205,7 @@
   function posAnomaly(p, o) {
     var base = posFields(p);
     for (var k in o) if (o.hasOwnProperty(k)) base[k] = o[k];
+    if (base.amount_pos == null && !isNaN(p.total)) base.amount_pos = p.total;
     return anomaly(base);
   }
 
@@ -1157,8 +1178,8 @@
       if (!isAllDineinPayments(p.payment_type)) {
         anomalies.push(posAnomaly(p, { source: "Sur place", severity: "moyenne",
           type: "Mode de paiement inattendu (sur place/emporter)",
-          detail: "Ticket " + p.ticket_name + " sur place/emporter payé '" +
-                  p.payment_type + "' (attendu Cash ou Credit card).",
+          detail: "Ticket " + p.ticket_name + " (" + hhmm(p.datetime) + ") sur place/emporter : '" +
+                  p.payment_type + "' au POS (attendu Cash ou Credit card).",
           amount_pos: p.total, payment_pos: p.payment_type }));
       }
     });

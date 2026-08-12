@@ -631,6 +631,18 @@
     bindValidateButtons(panel);
   }
 
+  function fmtAnomalyMontant(a) {
+    var parts = [];
+    if (a.amount_pos != null && !isNaN(a.amount_pos)) {
+      parts.push("<b>" + fmtDH(a.amount_pos) + "</b> POS");
+    }
+    if (a.amount_source != null && !isNaN(a.amount_source)) {
+      parts.push("<b>" + fmtDH(a.amount_source) + "</b> source");
+    }
+    if (!parts.length) return "—";
+    return parts.join(" · ");
+  }
+
   function _anomalyRowHTML(a, withValidate, napsOkBadge) {
     var rowCls = napsOkBadge && isNapsTotalsOk(a) ? " row-naps-ok" : "";
     var badge = napsOkBadge && isNapsTotalsOk(a) ?
@@ -644,7 +656,8 @@
       "</td><td>" + escapeHtml(a.type) + badge + "</td><td>" + escapeHtml(a.file || "") +
       "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
       "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
-      escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+      escapeHtml(fmtTicketLabel(a)) + "</td><td>" + fmtAnomalyMontant(a) + "</td><td>" +
+      escapeHtml(a.detail) + "</td></tr>";
   }
 
   function _tableHTML(rows, withValidate, napsOkBadge) {
@@ -652,7 +665,7 @@
     if (withValidate) head += "<th>Valider</th>";
     head += "<th>Gravité</th><th>Source</th><th>Type</th>" +
             "<th>Fichier</th><th>Ligne</th><th>Date/heure</th>" +
-            "<th>Ticket</th><th>Détail</th></tr></thead>";
+            "<th>Ticket</th><th>Montant</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
       return _anomalyRowHTML(a, withValidate, napsOkBadge);
     }).join("") + "</tbody>";
@@ -686,19 +699,19 @@
     var table = document.getElementById("anom-table");
     if (!all.length) {
       table.innerHTML =
-        "<tbody><tr><td colspan='9'>✅ Aucune anomalie en attente pour ces filtres.</td></tr></tbody>";
+        "<tbody><tr><td colspan='10'>✅ Aucune anomalie en attente pour ces filtres.</td></tr></tbody>";
       return;
     }
     var head = "<thead><tr><th>Valider</th><th>Gravité</th><th>Source</th><th>Type</th>" +
-      "<th>Fichier</th><th>Ligne</th><th>Date/heure</th><th>Ticket</th><th>Détail</th></tr></thead>";
+      "<th>Fichier</th><th>Ligne</th><th>Date/heure</th><th>Ticket</th><th>Montant</th><th>Détail</th></tr></thead>";
     var body = "<tbody>";
     if (!actionable.length && pairingOk.length) {
-      body += "<tr><td colspan='9' class='muted' style='background:#f4fbf7'>" +
+      body += "<tr><td colspan='10' class='muted' style='background:#f4fbf7'>" +
         "✅ Aucune anomalie financière — seulement des écarts d'appariement TPE (totaux OK).</td></tr>";
     }
     actionable.forEach(function (a) { body += _anomalyRowHTML(a, true, false); });
     if (pairingOk.length) {
-      body += "<tr><td colspan='9' class='muted' style='background:#f4fbf7;font-weight:600'>" +
+      body += "<tr><td colspan='10' class='muted' style='background:#f4fbf7;font-weight:600'>" +
         "✅ Appariement TPE — totaux POS CB = NAPS (détail dans la section verte ci-dessus)</td></tr>";
       pairingOk.forEach(function (a) { body += _anomalyRowHTML(a, true, true); });
     }
@@ -719,13 +732,14 @@
     document.getElementById("validated-count").textContent =
       rows.length + " anomalie(s) validée(s) — exclues des calculs";
     var head = "<thead><tr><th>Action</th><th>Gravité</th><th>Source</th><th>Type</th>" +
-               "<th>Ticket</th><th>Détail</th></tr></thead>";
+               "<th>Ticket</th><th>Montant</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
       return "<tr class='row-validated'><td><button type='button' class='btn-unvalidate' " +
              "data-id='" + escapeHtml(a.id) + "' title='Annuler la validation'>↩ Annuler</button></td>" +
              "<td><span class='sev-badge sev-" + a.severity + "'>" + SEV_BADGE[a.severity] +
              "</span></td><td>" + escapeHtml(a.source) + "</td><td>" + escapeHtml(a.type) +
-             "</td><td>" + escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+             "</td><td>" + escapeHtml(fmtTicketLabel(a)) + "</td><td>" +
+             fmtAnomalyMontant(a) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
     var table = document.getElementById("validated-table");
     table.innerHTML = head + body;

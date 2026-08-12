@@ -570,6 +570,19 @@ montant sur la journée → reclasse **SP&EMP** (`spemp_bipeur`), info au lieu d
 
 ---
 
+### 2026-08-12 — Montant affiché sur toutes les anomalies
+
+**Demandé par** : gérant — toujours voir le montant (ex. SP&EMP Bank Transfer).
+
+**Changements** :
+- Colonne **Montant** dans les tableaux anomalies / validées / infos
+- `posAnomaly` remplit `amount_pos` depuis le ticket si absent
+- Détail enrichi automatiquement avec les DH si non mentionnés
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
