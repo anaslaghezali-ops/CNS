@@ -86,7 +86,7 @@
   function sumPosCcOnDay(pos, d) {
     var s = 0;
     pos.forEach(function (p) {
-      if (dateKey(p.datetime) !== d) return;
+      if (posBusinessDateKey(p.datetime) !== d) return;
       if (isPurePaymentType(p.payment_type, "Credit card")) {
         s += isNaN(p.total) ? 0 : p.total;
       } else if (p._naps_split_cc != null && !isNaN(p._naps_split_cc)) {
@@ -99,6 +99,8 @@
   var WINDOW_BEFORE_MIN = 1;
   var WINDOW_AFTER_MIN = 20;
   var AMOUNT_TOL = 0.5;
+  /** Journée caisse POS : de 03:00 à 02:59 le lendemain (pas minuit–minuit). */
+  var POS_BUSINESS_DAY_START_HOUR = 3;
 
   // ----------------------------------------------------------------------- //
   // Helpers
@@ -134,6 +136,11 @@
     if (!d) return "";
     var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
     return y + "-" + (m < 10 ? "0" + m : m) + "-" + (dd < 10 ? "0" + dd : dd);
+  }
+  /** Date de journée POS (03:00 → 02:59 lendemain), pas la date calendaire du ticket. */
+  function posBusinessDateKey(d) {
+    if (!d) return "";
+    return dateKey(new Date(d.getTime() - POS_BUSINESS_DAY_START_HOUR * 3600000));
   }
   function minutesBetween(a, b) { return (a.getTime() - b.getTime()) / 60000; }
   function hhmm(d) {
@@ -570,7 +577,7 @@
 
     var posDates = {};
     pos.forEach(function (p) {
-      var d = dateKey(p.datetime);
+      var d = posBusinessDateKey(p.datetime);
       if (!d) return;
       if (isPurePaymentType(p.payment_type, "Credit card") || isSplitCashCreditCard(p.payment_type)) {
         posDates[d] = true;
@@ -578,9 +585,9 @@
     });
 
     Object.keys(posDates).sort().forEach(function (d) {
-      var posDay = posCC.filter(function (p) { return dateKey(p.datetime) === d; });
+      var posDay = posCC.filter(function (p) { return posBusinessDateKey(p.datetime) === d; });
       var splitDay = pos.filter(function (p) {
-        return dateKey(p.datetime) === d && isSplitCashCreditCard(p.payment_type);
+        return posBusinessDateKey(p.datetime) === d && isSplitCashCreditCard(p.payment_type);
       });
 
       if (!(d >= nMin && d <= nMax)) {
@@ -1219,7 +1226,8 @@
       if (usedT.has(p.ticket_no)) return;
       anomalies.push(posAnomaly(p, { source: "POS", severity: "info",
         type: "Ticket sans numéro (à rattacher)",
-        detail: "Ticket " + p.ticket_no + " du " + dateKey(p.datetime) + " à " +
+        detail: "Ticket " + p.ticket_no + " du " + posBusinessDateKey(p.datetime) +
+                " (POS) à " + hhmm(p.datetime) + " (" +
                 hhmm(p.datetime) + " (" + p.payment_type + ", " +
                 (isNaN(p.total) ? "?" : p.total) + " DH) sans numéro — non rattaché à " +
                 "une commande Glovo ni Site.",
@@ -1763,15 +1771,18 @@
   // non couvert par le POS ne doit pas être signalée comme « absente »).
   function posDateSet(pos) {
     var set = new Set();
-    pos.forEach(function (p) { var k = dateKey(p.datetime); if (k) set.add(k); });
+    pos.forEach(function (p) {
+      var k = posBusinessDateKey(p.datetime);
+      if (k) set.add(k);
+    });
     return set;
   }
 
   function filterToPosDates(rows, getDate, posDates) {
     var kept = [], excluded = 0;
     rows.forEach(function (r) {
-      var k = dateKey(getDate(r));
-      if (k && !posDates.has(k)) { excluded++; return; }  // hors période -> ignoré
+      var k = posBusinessDateKey(getDate(r));
+      if (k && !posDates.has(k)) { excluded++; return; }  // hors période POS (journée caisse)
       kept.push(r);
     });
     return { kept: kept, excluded: excluded };
@@ -1866,7 +1877,7 @@
   function runDailyBreakdown(pos, glovo, naps, site) {
     var byDay = {};
     listPosDates(pos).forEach(function (dk) {
-      var dayPos = pos.filter(function (p) { return dateKey(p.datetime) === dk; });
+      var dayPos = pos.filter(function (p) { return posBusinessDateKey(p.datetime) === dk; });
       if (!dayPos.length) return;
       byDay[dk] = run(dayPos, glovo, naps, site);
     });
@@ -2238,7 +2249,7 @@
     posDates.forEach(function (d) {
       if (!d || d < nMin || d > nMax) return;
       var posDay = pos.filter(function (p) {
-        return dateKey(p.datetime) === d &&
+        return posBusinessDateKey(p.datetime) === d &&
           isPurePaymentType(p.payment_type, "Credit card");
       });
       var napsDay = naps.filter(function (n) { return n.date === d; });
@@ -2642,6 +2653,8 @@
     getFinancialContributors: getFinancialContributors,
     ecartContributionForAnomaly: ecartContributionForAnomaly,
     sumFinancialContributions: sumFinancialContributions,
+    posBusinessDateKey: posBusinessDateKey,
+    POS_BUSINESS_DAY_START_HOUR: POS_BUSINESS_DAY_START_HOUR,
     CH: { GLOVO: CH_GLOVO, SITE: CH_SITE, DINEIN: CH_DINEIN,
           UNASSIGNED: CH_UNASSIGNED, OTHER: CH_OTHER },
   };
