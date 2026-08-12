@@ -502,6 +502,22 @@ Le total se recalcule après validation d'anomalies (ligne TPE ajustée comme la
 
 ---
 
+### 2026-08-12 — Paiements POS fractionnés (Cash, Cash / Cash + CB)
+
+**Demandé par** : gérant — « Cash, Cash, Cash » = fractionnement cash (pas une anomalie).
+« Cash, Credit card » = split cash + carte : la ligne NAPS non appariée du jour = part CB,
+le reste = cash.
+
+**Règles** :
+- `parsePaymentTypes` sur la colonne Payment type
+- Plus d’anomalie « mode inattendu » si tous les modes sont Cash ou Credit card
+- Split Cash+CB : appariement NAPS (montant &lt; total ticket) → `_naps_split_cc` sur le ticket POS
+- Totaux financiers ventilés (part CB / part Cash)
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/reconcile.py`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

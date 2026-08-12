@@ -32,6 +32,20 @@ GLOVO_PAYMENT_MAP = {"Online": "Bank Transfer", "Cash": "Cash"}
 SITE_EXPECTED_PAYMENT = "Bank Transfer"
 DINEIN_ALLOWED_PAYMENTS = {"Cash", "Credit card"}
 
+
+def _parse_payment_types(raw: str) -> list[str]:
+    if not raw:
+        return []
+    return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+
+def _is_all_dinein_payments(raw: str) -> bool:
+    types = _parse_payment_types(raw)
+    if not types:
+        return str(raw).strip() in DINEIN_ALLOWED_PAYMENTS
+    return all(t in DINEIN_ALLOWED_PAYMENTS for t in types)
+
+
 # Fenêtre temporelle : le caissier tape la commande Glovo entre l'heure de
 # réception (possiblement à la minute exacte) et 10 min après au maximum.
 GLOVO_WINDOW_BEFORE_MIN = 1    # simple tolérance d'arrondi à la minute
@@ -83,10 +97,11 @@ def _site_order_is_takeout(site_row) -> bool:
 
 def _site_payment_warning(pos_row, site_row) -> str:
     if _site_order_is_takeout(site_row):
-        if pos_row["payment_type"] == "Bank Transfer":
+        if "Bank Transfer" in _parse_payment_types(pos_row["payment_type"]) or \
+                pos_row["payment_type"] == "Bank Transfer":
             return (" ⚠️ Commande à emporter (col H) : « Bank Transfer » interdit au POS "
                     "(Cash ou Credit card uniquement).")
-        if pos_row["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
+        if not _is_all_dinein_payments(pos_row["payment_type"]):
             return (f" ⚠️ Commande à emporter : paiement '{pos_row['payment_type']}' "
                     f"inattendu (Cash ou Credit card).")
         return ""
@@ -99,7 +114,8 @@ def _site_payment_warning(pos_row, site_row) -> str:
 def _push_site_payment_anomalies(pos_row, site_row, anomalies):
     sid = str(site_row["identifiant"])
     if _site_order_is_takeout(site_row):
-        if pos_row["payment_type"] == "Bank Transfer":
+        if "Bank Transfer" in _parse_payment_types(pos_row["payment_type"]) or \
+                pos_row["payment_type"] == "Bank Transfer":
             anomalies.append(_anomaly(
                 "Site", "haute", "Mode de paiement incorrect (commande à emporter)",
                 f"Commande site {sid} à emporter (col H « {site_row.get('delivery_method', '')} ») : "
@@ -109,7 +125,7 @@ def _push_site_payment_anomalies(pos_row, site_row, anomalies):
                    "payment_pos": pos_row["payment_type"],
                    "payment_source": "Cash ou Credit card"},
             ))
-        elif pos_row["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
+        elif not _is_all_dinein_payments(pos_row["payment_type"]):
             anomalies.append(_anomaly(
                 "Site", "haute", "Mode de paiement incorrect (commande à emporter)",
                 f"Commande site {sid} à emporter : attendu Cash ou Credit card, "
@@ -630,7 +646,7 @@ def reconcile_dinein(pos_df: pd.DataFrame):
     anomalies = []
     dinein = pos_df[pos_df["channel_detected"] == CHANNEL_DINEIN]
     for _, p in dinein.iterrows():
-        if p["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
+        if not _is_all_dinein_payments(p["payment_type"]):
             anomalies.append(_anomaly(
                 "Sur place", "moyenne", "Mode de paiement inattendu (sur place/emporter)",
                 f"Ticket {p['ticket_name']} sur place/emporter payé "
