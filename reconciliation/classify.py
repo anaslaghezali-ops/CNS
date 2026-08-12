@@ -6,6 +6,7 @@ Règles (définies avec le gérant ChickNSter) :
   - 1 à 3 chiffres                → Glovo
   - identifiant à 5 chiffres      → Site (correspond à l'ID du fichier site)
   - « sp… » / « emp… »            → Sur place / À emporter
+    (ex. sp, emp9, **9sp**, 2sp — chiffres avant ou après)
   - vide                          → À rattacher (ticket name oublié)
   - autre                         → Autre / manuel
 """
@@ -32,9 +33,9 @@ EXPECTED_PAYMENTS = {
 
 _RE_1_3_DIGITS = re.compile(r"^\d{1,3}$")
 _RE_5_DIGITS = re.compile(r"^\d{5}$")
-# « sp » ou « emp », seul ou suivi d'un numéro, avec ou sans espace :
-# Sp, Sp3, Sp 3, Emp, Emp2, Emp 11 …
-_RE_SP_EMP = re.compile(r"^(sp|emp)\s*\d*$", re.IGNORECASE)
+# « sp » ou « emp », seul ou avec numéro avant/après, avec ou sans espace :
+# Sp, Sp3, Sp 3, Emp, Emp2, 9sp, 2sp, 9emp …
+_RE_SP_EMP = re.compile(r"^\d*(sp|emp)\d*$", re.IGNORECASE)
 
 
 def classify_ticket_name(ticket_name: str, site_ids: set[str] | None = None) -> str:

@@ -224,7 +224,7 @@
   // ----------------------------------------------------------------------- //
   var RE_1_3 = /^\d{1,3}$/;
   var RE_5 = /^\d{5}$/;
-  var RE_SPEMP = /^(sp|emp)\s*\d*$/i;
+  var RE_SPEMP = /^\d*(sp|emp)\d*$/i;
 
   function classify(name, siteIds) {
     var n = s(name);

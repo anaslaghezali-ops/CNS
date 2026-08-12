@@ -41,7 +41,7 @@ accessible à :
 |-------------|-------|--------------------|
 | `1-3 chiffres` (ex. `137`) | Glovo | Bank Transfer / Cash |
 | `5 chiffres` (ex. `58379`) | Site | Bank Transfer |
-| `sp…` / `emp…` | Sur place / À emporter | Cash / Credit card |
+| `sp…` / `emp…` (ex. `sp`, `9sp`, `emp2`) | Sur place / À emporter | Cash / Credit card |
 | *(vide)* | À rattacher | recherche par heure |
 
 **Correspondances de paiement :**

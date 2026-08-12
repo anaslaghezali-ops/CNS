@@ -247,13 +247,29 @@ isolées.
 
 ---
 
+### 2026-08-12 — Classification `9sp` / `2sp` → Sur place
+
+**Demandé par** : gérant (session Cursor).
+
+**Problème** : tickets comme `9sp`, `2sp` (chiffre **avant** sp/emp) classés « Autre »
+— ~9 % des tickets hors des contrôles Glovo/Site/sur place.
+
+**Règle appliquée** : regex sur place étendue à `^\d*(sp|emp)\d*$` (compact, sans espaces)
+→ reconnaît `sp`, `emp9`, `9sp`, `2sp`, `Sp 3`, etc.
+
+**Workflow gérant** (noté, pas codé) : une fois Site + Glovo + TPE à 0 écart,
+le reste (cash sur place, enveloppes caissiers) est vérifié **manuellement**.
+
+**Fichiers modifiés** : `reconciliation/classify.py`, `docs/reconcile.js`, `README.md`
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :
 
-1. **Canal « Autre »** (66 tickets) : formats `9sp`, `2sp`, `Hibaster` non
-   reconnus par `classify.py` (regex attend `sp`/`emp` en **début** de ticket
-   name). Impact sur classification sur place.
+1. **Canal « Autre »** : formats encore non reconnus (ex. `Hibaster`). Les formats
+   `9sp` / `2sp` sont maintenant classés sur place (voir entrée ci-dessus).
 2. **NAPS 7 août** : écarts 89 DH (`9sur`), 119 DH (`Emp9`) POS vs 124 DH NAPS.
 3. **Site** : commande `57767` (205 DH) absente du POS ; typos `58158`/`58159`,
    `57559`/`57599`.
