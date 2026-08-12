@@ -974,6 +974,7 @@
       }
     });
     var handledNo = {};  // ticket_no consommés par un vrai cluster doublon
+    var misusedNo = {};  // ticket_no signalés « n° réutilisé » (pas orphelin Glovo)
     Object.keys(groups).forEach(function (name) {
       var list = groups[name];
       if (list.length < 2) return;
@@ -1005,6 +1006,7 @@
             if (p.channel !== CH_GLOVO) return;
             if (p.payment_type === "Cash") {
               anomalies.push(flagMisusedGlovoNumber(p, matchedLine, matchedG));
+              if (p.ticket_no) misusedNo[p.ticket_no] = true;
             }
           });
           return;
@@ -1065,6 +1067,8 @@
       if (a.type !== "Ticket Glovo au POS sans commande correspondante" &&
           a.type !== "Ticket Site au POS sans commande correspondante") return true;
       if (a.pos_ticket_no && handledNo[a.pos_ticket_no]) return false;
+      if (a.pos_ticket_no && misusedNo[a.pos_ticket_no] &&
+          a.type === "Ticket Glovo au POS sans commande correspondante") return false;
       return true;
     });
   }
