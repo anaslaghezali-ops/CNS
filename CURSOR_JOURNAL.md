@@ -396,6 +396,21 @@ Analyse sur fichiers réels (non versionnés) — pour référence future :
 
 ---
 
+### 2026-08-12 — Ticket 167 : doublon/correction (98 BT erroné → 110 Cash)
+
+**Cas** : ticket 167 saisi 2 fois — v1 98 DH Bank Transfer (aucune commande Glovo) +
+v2 110 DH Cash (commande Glovo `101734838230`). Classé « orphelin » au lieu de doublon.
+
+**Cause** : `isLikelyCorrectionCluster` exigeait le même montant sur toutes les lignes non nulles,
+ou une similarité produits qui échouait (format Glovo `Order Items` avec crochets).
+
+**Règle** : si **une seule** commande Glovo matche une ligne du cluster, les autres lignes avec
+**mauvais paiement** (ex. BT vs Cash attendu) = correction ; Cash 0 DH = vente distincte (ticket 15).
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
