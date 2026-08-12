@@ -683,6 +683,77 @@
   }
 
   // ----------------------------------------------------------------------- //
+  // DOUBLONS / CORRECTIONS : un même NUMÉRO (Glovo 1-3 chiffres, Site) saisi
+  // plusieurs fois à quelques minutes d'intervalle = commande re-tapée (souvent
+  // une correction). On ne traite QUE les numéros (jamais sp/emp, qui peuvent
+  // légitimement se répéter). Remplace l'anomalie « orphelin » par une
+  // « correction » détaillant les changements (montant, paiement).
+  // ----------------------------------------------------------------------- //
+  var DUP_WINDOW_MIN = 30;
+
+  function detectDuplicates(pos, anomalies) {
+    var groups = {};
+    pos.forEach(function (p) {
+      if ((p.channel === CH_GLOVO || p.channel === CH_SITE) && /^\d+$/.test(p.ticket_name)) {
+        (groups[p.ticket_name] = groups[p.ticket_name] || []).push(p);
+      }
+    });
+    var handled = {};  // ticket_name -> true : retirer l'anomalie orpheline
+    Object.keys(groups).forEach(function (name) {
+      var list = groups[name];
+      if (list.length < 2) return;
+      list.sort(function (a, b) {
+        return (a.datetime ? a.datetime.getTime() : 0) - (b.datetime ? b.datetime.getTime() : 0);
+      });
+      // Regrouper en clusters de saisies rapprochées (≤ 30 min).
+      var clusters = [], cur = [list[0]];
+      for (var i = 1; i < list.length; i++) {
+        var prev = cur[cur.length - 1];
+        if (list[i].datetime && prev.datetime &&
+            Math.abs(minutesBetween(list[i].datetime, prev.datetime)) <= DUP_WINDOW_MIN) {
+          cur.push(list[i]);
+        } else { clusters.push(cur); cur = [list[i]]; }
+      }
+      clusters.push(cur);
+
+      clusters.forEach(function (cl) {
+        if (cl.length < 2) return;
+        handled[name] = true;
+        var first = cl[0], last = cl[cl.length - 1];
+        var versions = cl.map(function (p, idx) {
+          return "v" + (idx + 1) + " " + hhmm(p.datetime) + " " +
+                 (isNaN(p.total) ? "?" : p.total.toFixed(0)) + " DH " + p.payment_type +
+                 " (ligne " + p.row + ")";
+        }).join(" → ");
+        var diffs = [];
+        if (!isNaN(first.total) && !isNaN(last.total) && Math.abs(first.total - last.total) > AMOUNT_TOL)
+          diffs.push("montant " + first.total.toFixed(0) + "→" + last.total.toFixed(0));
+        if (first.payment_type !== last.payment_type)
+          diffs.push("paiement " + first.payment_type + "→" + last.payment_type);
+        var extra = cl.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0) -
+                    (isNaN(last.total) ? 0 : last.total);
+        anomalies.push(anomaly({
+          source: cl[0].channel === CH_SITE ? "Site" : "Glovo", severity: "moyenne",
+          type: "Ticket en double (correction)",
+          detail: "Ticket " + name + " saisi " + cl.length + " fois (doublon / correction) : " +
+                  versions + ". " + (diffs.length ? "Correction : " + diffs.join(", ") + ". " : "") +
+                  "⚠️ La/les copie(s) en trop gonflent le total POS de " + extra.toFixed(0) +
+                  " DH — vérifier qu'une version est bien annulée.",
+          ticket_name: name, pos_datetime: last.datetime, source_ref: name,
+          amount_pos: extra, file: "POS", row: last.row, when: dtFull(last.datetime) }));
+      });
+    });
+
+    // Retirer les anomalies « orphelin » remplacées par une correction.
+    return anomalies.filter(function (a) {
+      if (handled[a.ticket_name] &&
+          (a.type === "Ticket Glovo au POS sans commande correspondante" ||
+           a.type === "Ticket Site au POS sans commande correspondante")) return false;
+      return true;
+    });
+  }
+
+  // ----------------------------------------------------------------------- //
   // Orchestration
   // ----------------------------------------------------------------------- //
   // Le fichier POS définit la PÉRIODE d'analyse : les commandes Glovo/Site
@@ -736,6 +807,7 @@
     anomalies = anomalies.concat(reconcileDinein(pos));
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
+    anomalies = detectDuplicates(pos, anomalies);  // doublons/corrections
 
     annotate(pos, anomalies);
     var summary = buildSummary(pos, anomalies, glovo, naps, site);
