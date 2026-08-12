@@ -524,7 +524,13 @@
         (r.kind === "bipeur" ?
           "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#e8f6ef;" +
           "border:1px solid #a8d5c2;color:#1e6b45'>Bipeur SP&EMP</span>" :
-          "<span class='muted'>Libellé libre → SP&EMP</span>");
+          (r.kind === "cash_comptoir" ?
+            "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#e8f0fa;" +
+            "border:1px solid #b8cfe8;color:#2a5080'>Cash comptoir SP&EMP</span>" :
+            (r.kind === "cb_naps" ?
+              "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#e8f6ef;" +
+              "border:1px solid #a8d5c2;color:#1e6b45'>CB comptoir (NAPS OK)</span>" :
+              "<span class='muted'>Libellé libre → SP&EMP</span>")));
       html += "<tr><td>" + escapeHtml(r.when || "") + "</td><td>" +
         escapeHtml(r.ticket_name) + "</td><td>" + escapeHtml(r.ticket_no) + "</td><td><b>" +
         (r.total == null || isNaN(r.total) ? "—" : fmtDH(r.total)) + "</b></td><td>" +
@@ -977,7 +983,10 @@
             "Date/heure": r.when, "Ticket name": r.ticket_name, "N° POS": r.ticket_no,
             "Total": r.total, "Paiement": r.payment_type,
             "Type": r.kind === "a_rattacher" ? "À rattacher" :
-              (r.kind === "bipeur" ? "Bipeur SP&EMP (NAPS OK)" : "Libellé libre (SP&EMP)"),
+              (r.kind === "bipeur" ? "Bipeur SP&EMP (NAPS OK)" :
+                (r.kind === "cash_comptoir" ? "Cash comptoir SP&EMP" :
+                  (r.kind === "cb_naps" ? "CB comptoir (NAPS OK)" :
+                    "Libellé libre (SP&EMP)"))),
           };
         })), "SP&EMP hors Glovo-Site");
     }

@@ -595,6 +595,21 @@ Livraison site reste Bank Transfer (hors cette ligne).
 
 ---
 
+### 2026-08-12 — Tickets non rattachés Cash / CB+NAPS → SP&EMP
+
+**Demandé par** : gérant — ticket non rattaché payé Cash = sur place/emporter ;
+ticket CB non rattaché avec ligne NAPS correspondante = sur place/emporter.
+
+**Règles** :
+- Après passe à rattacher : Cash seul → `spemp_unattached_cash`
+- CB avec **une seule** ligne NAPS (jour + montant) → `spemp_unattached_naps`
+- Idem pour orphelins Glovo/Site sans commande (pas seulement « Ticket » vide)
+- Info « Ticket non rattaché → SP&EMP » au lieu d’anomalie
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

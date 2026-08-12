@@ -1019,6 +1019,112 @@
     return anomalies.filter(function (a) { return removeIds.indexOf(a.id) < 0; });
   }
 
+  function findPosByTicketNo(pos, ticketNo) {
+    if (!ticketNo) return null;
+    var found = null;
+    pos.forEach(function (px) {
+      if (px.ticket_no === ticketNo) found = px;
+    });
+    return found;
+  }
+
+  function isCashOnlyPayment(p) {
+    var types = parsePaymentTypes(p.payment_type);
+    if (!types.length) return String(p.payment_type).trim() === "Cash";
+    return types.every(function (t) { return t === "Cash"; });
+  }
+
+  function ticketHasCreditCard(p) {
+    return isPurePaymentType(p.payment_type, "Credit card") ||
+      parsePaymentTypes(p.payment_type).indexOf("Credit card") >= 0;
+  }
+
+  function ccAmountForNapsMatch(p) {
+    var alloc = allocatePosPaymentAmounts(p);
+    if (alloc["Credit card"] > 0) return alloc["Credit card"];
+    if (ticketHasCreditCard(p) && !isNaN(p.total)) return p.total;
+    return 0;
+  }
+
+  function uniqueNapsHit(naps, date, amount) {
+    if (!naps || !date || amount <= 0) return null;
+    var hits = naps.filter(function (nx) {
+      return nx.date === date && !isNaN(nx.montant) &&
+        Math.abs(nx.montant - amount) <= AMOUNT_TOL;
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  function spempMatchForUnattached(p, naps) {
+    if (isCashOnlyPayment(p)) {
+      return { ok: true, kind: "spemp_unattached_cash", napsHit: null, ccAmt: 0 };
+    }
+    if (naps && ticketHasCreditCard(p)) {
+      var cc = ccAmountForNapsMatch(p);
+      var hit = uniqueNapsHit(naps, dateKey(p.datetime), cc);
+      if (hit) {
+        return { ok: true, kind: "spemp_unattached_naps", napsHit: hit, ccAmt: cc };
+      }
+    }
+    return { ok: false };
+  }
+
+  var UNATTACHED_RESOLVE_TYPES = [
+    "Ticket sans numéro (à rattacher)",
+    "Ticket Glovo au POS sans commande correspondante",
+    "Ticket Site au POS sans commande correspondante",
+  ];
+
+  /**
+   * Ticket non rattaché (Glovo/Site/à rattacher) payé Cash → SP&EMP.
+   * Ticket non rattaché CB avec ligne NAPS unique (même jour, même montant) → SP&EMP.
+   */
+  function resolveUnattachedAsSpemp(pos, naps, anomalies) {
+    var removeIds = [];
+
+    anomalies.forEach(function (a) {
+      if (UNATTACHED_RESOLVE_TYPES.indexOf(a.type) < 0) return;
+      var p = findPosByTicketNo(pos, a.pos_ticket_no);
+      if (!p) return;
+      if (p.channel_match === "spemp_bipeur") return;
+
+      var res = spempMatchForUnattached(p, naps);
+      if (!res.ok) return;
+
+      p.channel = CH_DINEIN;
+      p.channel_match = res.kind;
+      removeIds.push(a.id);
+
+      var amt = isNaN(p.total) ? 0 : p.total;
+      var detail;
+      if (res.kind === "spemp_unattached_cash") {
+        detail = "Ticket POS " + (p.ticket_name || p.ticket_no) + " (" +
+          amt.toFixed(0) + " DH Cash à " + hhmm(p.datetime) + ") non rattaché à " +
+          "Glovo/Site → sur place/emporter (vente comptoir cash).";
+      } else {
+        detail = "Ticket POS " + (p.ticket_name || p.ticket_no) + " (" +
+          res.ccAmt.toFixed(0) + " DH CB à " + hhmm(p.datetime) + ") non rattaché — " +
+          "ligne NAPS " + res.napsHit.row + " (" + res.ccAmt.toFixed(0) + " DH) → " +
+          "sur place/emporter.";
+      }
+
+      anomalies.push(anomaly({
+        source: "Sur place", severity: "info",
+        type: "Ticket non rattaché → SP&EMP",
+        detail: detail,
+        ticket_name: p.ticket_name,
+        pos_ticket_no: p.ticket_no,
+        pos_datetime: p.datetime,
+        amount_pos: amt,
+        payment_pos: p.payment_type,
+        when: dtFull(p.datetime),
+      }));
+    });
+
+    if (!removeIds.length) return anomalies;
+    return anomalies.filter(function (a) { return removeIds.indexOf(a.id) < 0; });
+  }
+
   // ----------------------------------------------------------------------- //
   // PASSE COMMUNE : tickets sans numéro (« Ticket »/vide) attribués JOINTEMENT
   // aux commandes Glovo ET Site encore manquantes — à la plus proche en temps,
@@ -1693,8 +1799,9 @@
       anomalies = anomalies.concat(rg.anomalies); missingGlovo = rg.missing;
       if (naps) anomalies = resolveGlovoOrphansAsSpemp(pos, naps, anomalies);
     }
-    anomalies = anomalies.concat(reconcileDinein(pos));
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
+    anomalies = resolveUnattachedAsSpemp(pos, naps, anomalies);
+    anomalies = anomalies.concat(reconcileDinein(pos));
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
     anomalies = detectDuplicates(pos, anomalies, glovo);  // doublons/corrections
     appendFinancialGapAnomalies(pos, glovo, site, anomalies);
@@ -1723,6 +1830,8 @@
     return pos.filter(function (p) {
       return p.channel_match === "spemp_libre" ||
         p.channel_match === "spemp_bipeur" ||
+        p.channel_match === "spemp_unattached_cash" ||
+        p.channel_match === "spemp_unattached_naps" ||
         p.channel === CH_UNASSIGNED;
     }).map(function (p) {
       return {
@@ -1733,6 +1842,8 @@
         when: dtFull(p.datetime),
         row: p.row,
         kind: p.channel_match === "spemp_bipeur" ? "bipeur" :
+          p.channel_match === "spemp_unattached_cash" ? "cash_comptoir" :
+          p.channel_match === "spemp_unattached_naps" ? "cb_naps" :
           (p.channel === CH_UNASSIGNED ? "a_rattacher" : "libre"),
         channel_match: p.channel_match || "",
       };
