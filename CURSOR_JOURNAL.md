@@ -182,6 +182,23 @@ commande correspondante ».
 
 ---
 
+### 2026-08-12 — Glovo JS : exiger le montant en phase 1 (ticket 658 / 199 DH)
+
+**Problème** : fausse orpheline ticket POS `658` (199 DH, 16:15) alors que Glovo
+ligne 158 = commande `101736427596` (Online, 199 DH W−AE, reçue 16:12).
+
+**Cause** : appariement global JS phase 1 classait par **temps seul** ; le ticket
+`725` (120 DH à 16:11, +1 min) était préféré à `658` (199 DH à 16:15, +3 min).
+La commande 199 DH était « consommée » par le mauvais ticket → 658 orphelin.
+
+**Correction** : phase 1 (et saisie tardive / annulées) **exige** montant identique
+(comme le moteur Python). Phase 2 (mauvais paiement) privilégie le montant sans
+l'exiger.
+
+**Fichiers modifiés** : `docs/reconcile.js` (`assignGlobalList`).
+
+---
+
 ### Antérieur (branche `claude/chicknster-reconciliation-system-460chx`)
 
 Modifications déjà présentes **avant** la session Cursor du 12 août — ne pas
