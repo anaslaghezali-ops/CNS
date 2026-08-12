@@ -544,6 +544,20 @@ Lister les libellés libres et « À rattacher ».
 
 ---
 
+### 2026-08-12 — Info Glovo « écart cash » vs écart financier 0 DH
+
+**Problème** : info « Glovo Cash 25 vs POS 26 → écart -1 » alors que réconciliation
+financière Cash = 0 DH.
+
+**Explication** : l'info compare le **nombre** de commandes / tickets ; la réconciliation
+financière compare les **montants** en DH (peuvent être égaux avec un ticket en plus ou en moins).
+
+**Fix** : message info explicite + montants Glovo vs POS dans le détail.
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

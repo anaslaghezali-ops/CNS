@@ -1029,26 +1029,56 @@
     return anomalies;
   }
 
+  function posGlovoHasPayment(p, pay) {
+    var types = parsePaymentTypes(p.payment_type);
+    if (!types.length) return String(p.payment_type).trim() === pay;
+    return types.indexOf(pay) >= 0;
+  }
+
   function glovoAggregate(pos, glovo) {
-    // Écart global par mode de paiement (info), sur canaux FINAUX (après passes).
+    // Info : écart de NOMBRE de commandes vs tickets (≠ réconciliation financière en DH).
     var anomalies = [];
-    var delivered = glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; });
+    var delivered = glovo.filter(function (g) {
+      return (g.status || "").toLowerCase() === "delivered";
+    });
     var posGlovo = pos.filter(function (p) { return p.channel === CH_GLOVO; });
     var gOnline = delivered.filter(function (g) { return g.payment_type === "Online"; }).length;
     var gCash = delivered.filter(function (g) { return g.payment_type === "Cash"; }).length;
-    var pBT = posGlovo.filter(function (p) { return p.payment_type === "Bank Transfer"; }).length;
-    var pCash = posGlovo.filter(function (p) { return p.payment_type === "Cash"; }).length;
+    var pBT = posGlovo.filter(function (p) { return posGlovoHasPayment(p, "Bank Transfer"); }).length;
+    var pCash = posGlovo.filter(function (p) { return posGlovoHasPayment(p, "Cash"); }).length;
+
+    var gOnlineAmt = 0, gCashAmt = 0;
+    delivered.forEach(function (g) {
+      var a = isNaN(g.amount) ? 0 : g.amount;
+      if (g.payment_type === "Online") gOnlineAmt += a;
+      if (g.payment_type === "Cash") gCashAmt += a;
+    });
+    var pBTAmt = 0, pCashAmt = 0;
+    posGlovo.forEach(function (p) {
+      var alloc = allocatePosPaymentAmounts(p);
+      pBTAmt += alloc["Bank Transfer"] || 0;
+      pCashAmt += alloc["Cash"] || 0;
+    });
+
     if (gOnline !== pBT) {
-      anomalies.push(anomaly({ source: "Glovo", severity: "info",
-        type: "Écart global paiement en ligne",
-        detail: "Glovo 'Online' : " + gOnline + " vs POS 'Bank Transfer' (tickets Glovo) : " +
-                pBT + " → écart de " + (gOnline - pBT) + "." }));
+      anomalies.push(anomaly({
+        source: "Glovo", severity: "info",
+        type: "Écart global paiement en ligne (nombre)",
+        detail: "Écart de **nombre** (pas le montant financier) : Glovo Online " + gOnline +
+                " commande(s) vs " + pBT + " ticket(s) POS Bank Transfer (écart " +
+                (gOnline - pBT) + "). Montants : Glovo " + Math.round(gOnlineAmt) + " DH vs POS " +
+                Math.round(pBTAmt) + " DH — voir ligne « Glovo Online » en réconciliation financière.",
+      }));
     }
     if (gCash !== pCash) {
-      anomalies.push(anomaly({ source: "Glovo", severity: "info",
-        type: "Écart global paiement cash",
-        detail: "Glovo 'Cash' : " + gCash + " vs POS 'Cash' (tickets Glovo) : " +
-                pCash + " → écart de " + (gCash - pCash) + "." }));
+      anomalies.push(anomaly({
+        source: "Glovo", severity: "info",
+        type: "Écart global paiement cash (nombre)",
+        detail: "Écart de **nombre** (pas le montant financier) : Glovo Cash " + gCash +
+                " commande(s) vs " + pCash + " ticket(s) POS Cash (écart " +
+                (gCash - pCash) + "). Montants : Glovo " + Math.round(gCashAmt) + " DH vs POS " +
+                Math.round(pCashAmt) + " DH — si les montants sont égaux, l'écart financier Cash est 0 DH.",
+      }));
     }
     return anomalies;
   }
