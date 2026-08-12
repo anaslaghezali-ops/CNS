@@ -694,6 +694,18 @@ le bandeau ; correction ordre `site`/`naps` dans `enrichFinCashCollect`.
 
 ---
 
+### 2026-08-12 — Site emporter : caissier sur la ligne +130 DH
+
+**Demandé par** : gérant — +130 DH Site emporter (POS comptoir 0 DH) sans nom de caissier
+(ex. 19 juil. : commande 54767, User Hiba).
+
+**Fix** : attribution Site emporter via ticket POS (tous canaux), anomalies Site,
+appariement montant+heure si n° absent · ligne détail « À récupérer : Hiba +130 DH ».
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

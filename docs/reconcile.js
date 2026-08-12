@@ -1400,8 +1400,10 @@
           if (sc > bestScore) { bestScore = sc; bestP = px; }
         });
         if (bestP && bestScore >= 0.35) {
+          var sugTime = bestP.datetime ? " à " + hhmm(bestP.datetime) : "";
           a.detail += " [Suggestion : ticket " + bestP.ticket_name + " ligne " + bestP.row +
-                      " — produits ~" + Math.round(bestScore * 100) + " % compatibles, à vérifier]";
+                      sugTime + " — produits ~" + Math.round(bestScore * 100) +
+                      " % compatibles, à vérifier]";
         }
       }
     });
