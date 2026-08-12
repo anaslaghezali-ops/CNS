@@ -1,0 +1,18 @@
+# Données confidentielles (fichiers réels du restaurant) — ne jamais committer
+sample_data/
+*.xlsx
+*.xls
+!docs/**/*.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.streamlit/secrets.toml
+
+# OS / éditeurs
+.DS_Store
+.idea/
+.vscode/
