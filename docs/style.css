@@ -207,6 +207,9 @@ tbody tr:hover { background: #fbfbfb; }
 .cash-collect-item .cc-ecart-pos { color: #c45c00; font-weight: 700; }
 .cash-collect-item .cc-ecart-neg { color: #666; font-weight: 700; }
 .cash-collect-item .cc-hint { font-size: .82rem; color: #777; margin-top: 6px; }
+.cc-user-title { margin: 18px 0 8px; font-size: 1rem; color: #8b5a2b; }
+.cc-user-table { font-size: .9rem; }
+.cc-user-table th { font-size: .78rem; }
 
 .spemp-review-block {
   margin: 16px 0; padding: 14px 16px; background: #f5f8fc;

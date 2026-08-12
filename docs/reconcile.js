@@ -1819,7 +1819,8 @@
     summary.site_excluded = siteExcluded;
     summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
     return {
-      anomalies: anomalies, pos: pos, summary: summary,
+      anomalies: anomalies, pos: pos, glovo: glovo, naps: naps, site: site,
+      summary: summary,
       naps_balanced: naps_balanced,
       spemp_review: buildSpempReviewList(pos),
     };
@@ -1995,6 +1996,7 @@
 
     var cash_to_collect = buildCashToCollect(lines, byPayment, posSiteCounter, siteCashSrc,
       posSiteCash, posSiteCC);
+    enrichCashToCollectByUser(cash_to_collect, pos, glovo, site, naps, posDates);
 
     return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines,
              payment_breakdown: payment_breakdown,
@@ -2090,6 +2092,214 @@
       cash_expected_physical: Math.round(posCash + net),
       items: items,
     };
+  }
+
+  var CASH_COLLECT_UNATTRIBUTED = "Non attribué";
+  var CASH_COLLECT_LINE_LABELS = {
+    glovo_cash: "Glovo Cash",
+    site_cash: "Site emporter",
+    naps_tpe_over: "TPE CB > NAPS",
+  };
+
+  function posUserLabel(p) {
+    var u = s(p && p.user);
+    return u ? u : CASH_COLLECT_UNATTRIBUTED;
+  }
+
+  function glovoCountedInFinancial(g) {
+    var st = (g.status || "").toLowerCase();
+    if (st === "delivered") return true;
+    return st === "cancelled" && g.matched_pos;
+  }
+
+  function collectGlovoCashContributions(pos, glovo) {
+    var contribs = [];
+    if (!glovo) return contribs;
+    var byTicketNo = {};
+    pos.forEach(function (p) {
+      if (p.ticket_no) byTicketNo[p.ticket_no] = p;
+    });
+
+    glovo.forEach(function (g) {
+      if (!glovoCountedInFinancial(g)) return;
+      if (g.payment_type !== "Cash") return;
+      var srcAmt = isNaN(g.amount) ? 0 : g.amount;
+      if (srcAmt <= AMOUNT_TOL) return;
+      var p = g.matched_pos_ticket_no ? byTicketNo[g.matched_pos_ticket_no] : null;
+      if (p) {
+        var posCash = allocatePosPaymentAmounts(p).Cash || 0;
+        var delta = srcAmt - posCash;
+        if (Math.abs(delta) > AMOUNT_TOL) {
+          contribs.push({
+            user: posUserLabel(p),
+            amount: delta,
+            lineKey: "glovo_cash",
+            ticket_no: p.ticket_no,
+            ticket_name: p.ticket_name,
+            when: dtFull(p.datetime),
+            detail: "Glovo Cash " + g.order_id + " : source " + srcAmt.toFixed(0) +
+              " DH vs POS Cash " + posCash.toFixed(0) + " DH",
+            source_ref: String(g.order_id),
+          });
+        }
+      } else {
+        contribs.push({
+          user: CASH_COLLECT_UNATTRIBUTED,
+          amount: srcAmt,
+          lineKey: "glovo_cash",
+          ticket_no: "",
+          ticket_name: "",
+          when: g.received_at ? dtFull(g.received_at) : "",
+          detail: "Commande Glovo Cash " + g.order_id + " (" + srcAmt.toFixed(0) +
+            " DH) absente du POS",
+          source_ref: String(g.order_id),
+        });
+      }
+    });
+
+    pos.forEach(function (p) {
+      if (p.channel !== CH_GLOVO || p.matched_glovo_order) return;
+      var cash = allocatePosPaymentAmounts(p).Cash || 0;
+      if (cash <= AMOUNT_TOL) return;
+      contribs.push({
+        user: posUserLabel(p),
+        amount: -cash,
+        lineKey: "glovo_cash",
+        ticket_no: p.ticket_no,
+        ticket_name: p.ticket_name,
+        when: dtFull(p.datetime),
+        detail: "Ticket Glovo Cash " + (p.ticket_name || p.ticket_no) +
+          " sans commande (" + cash.toFixed(0) + " DH sur-saisi au POS)",
+      });
+    });
+    return contribs;
+  }
+
+  function collectSiteEmporterContributions(pos, site) {
+    var contribs = [];
+    if (!site) return contribs;
+    var byName = {};
+    pos.forEach(function (p) { byName[p.ticket_name] = p; });
+
+    site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
+      if (!siteOrderIsTakeout(o)) return;
+      var srcAmt = isNaN(o.order_total) ? 0 : o.order_total;
+      if (srcAmt <= AMOUNT_TOL) return;
+      var p = byName[o.identifiant];
+      if (p && p.channel === CH_SITE) {
+        var alloc = allocatePosPaymentAmounts(p);
+        var posCnt = (alloc.Cash || 0) + (alloc["Credit card"] || 0);
+        var delta = srcAmt - posCnt;
+        if (Math.abs(delta) > AMOUNT_TOL) {
+          contribs.push({
+            user: posUserLabel(p),
+            amount: delta,
+            lineKey: "site_cash",
+            ticket_no: p.ticket_no,
+            ticket_name: p.ticket_name,
+            when: dtFull(p.datetime),
+            detail: "Site emporter " + o.identifiant + " : " + srcAmt.toFixed(0) +
+              " DH vs POS comptoir " + posCnt.toFixed(0) + " DH",
+            source_ref: o.identifiant,
+          });
+        }
+      } else if (!p) {
+        contribs.push({
+          user: CASH_COLLECT_UNATTRIBUTED,
+          amount: srcAmt,
+          lineKey: "site_cash",
+          ticket_no: "",
+          ticket_name: "",
+          when: o.created_at ? dtFull(o.created_at) : "",
+          detail: "Site emporter " + o.identifiant + " (" + srcAmt.toFixed(0) +
+            " DH) absente du POS",
+          source_ref: o.identifiant,
+        });
+      }
+    });
+    return contribs;
+  }
+
+  function collectNapsTpeContributions(pos, naps, posDates) {
+    var contribs = [];
+    if (!naps || !naps.length || !posDates || !posDates.size) return contribs;
+    var napsDates = naps.map(function (n) { return n.date; }).filter(Boolean).sort();
+    if (!napsDates.length) return contribs;
+    var nMin = napsDates[0], nMax = napsDates[napsDates.length - 1];
+
+    posDates.forEach(function (d) {
+      if (!d || d < nMin || d > nMax) return;
+      var posDay = pos.filter(function (p) {
+        return dateKey(p.datetime) === d &&
+          isPurePaymentType(p.payment_type, "Credit card");
+      });
+      var napsDay = naps.filter(function (n) { return n.date === d; });
+      var napsUsed = new Set();
+
+      posDay.forEach(function (p) {
+        var amt = Math.round((isNaN(p.total) ? 0 : p.total) * 100) / 100;
+        if (amt <= 0) return;
+        var found = -1;
+        for (var i = 0; i < napsDay.length; i++) {
+          if (napsUsed.has(i)) continue;
+          if (Math.abs(napsDay[i].montant - amt) <= AMOUNT_TOL) { found = i; break; }
+        }
+        if (found >= 0) { napsUsed.add(found); return; }
+        contribs.push({
+          user: posUserLabel(p),
+          amount: amt,
+          lineKey: "naps_tpe_over",
+          ticket_no: p.ticket_no,
+          ticket_name: p.ticket_name,
+          when: dtFull(p.datetime),
+          detail: "CB " + amt.toFixed(0) + " DH sans ligne NAPS équivalente",
+        });
+      });
+    });
+    return contribs;
+  }
+
+  function aggregateCashCollectByUser(contributions) {
+    var map = {};
+    contributions.forEach(function (c) {
+      var u = c.user || CASH_COLLECT_UNATTRIBUTED;
+      if (!map[u]) {
+        map[u] = { user: u, tickets: [], to_collect: 0, over_recorded: 0, by_line: {} };
+      }
+      var bucket = map[u];
+      bucket.tickets.push(c);
+      var lk = c.lineKey || "";
+      if (!bucket.by_line[lk]) bucket.by_line[lk] = 0;
+      if (c.amount > AMOUNT_TOL) {
+        bucket.to_collect += c.amount;
+        bucket.by_line[lk] += c.amount;
+      } else if (c.amount < -AMOUNT_TOL) {
+        bucket.over_recorded += -c.amount;
+        bucket.by_line[lk] += c.amount;
+      }
+    });
+    return Object.keys(map).map(function (u) {
+      var b = map[u];
+      return {
+        user: b.user,
+        to_collect: Math.round(b.to_collect),
+        over_recorded: Math.round(b.over_recorded),
+        net_to_collect: Math.round(b.to_collect - b.over_recorded),
+        by_line: b.by_line,
+        tickets: b.tickets,
+      };
+    }).sort(function (a, b) { return b.net_to_collect - a.net_to_collect; });
+  }
+
+  /** Ventile le cash à collecter par utilisateur POS (colonne F « User »). */
+  function enrichCashToCollectByUser(cc, pos, glovo, site, naps, posDates) {
+    if (!cc) return cc;
+    var contribs = collectGlovoCashContributions(pos, glovo);
+    contribs = contribs.concat(collectSiteEmporterContributions(pos, site));
+    contribs = contribs.concat(collectNapsTpeContributions(pos, naps, posDates));
+    cc.ticket_contributions = contribs;
+    cc.by_user = aggregateCashCollectByUser(contribs);
+    return cc;
   }
 
   /** Totaux POS par mode de paiement avec split canal (Glovo / SP&EMP / Site). */
@@ -2333,6 +2543,7 @@
     classify: classify, run: run, listPosDates: listPosDates, runDailyBreakdown: runDailyBreakdown,
     sumFinancialAdjustments: sumFinancialAdjustments,
     applyFinancialAdjustments: applyFinancialAdjustments,
+    enrichCashToCollectByUser: enrichCashToCollectByUser,
     getFinancialContributors: getFinancialContributors,
     ecartContributionForAnomaly: ecartContributionForAnomaly,
     sumFinancialContributions: sumFinancialContributions,

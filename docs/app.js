@@ -206,20 +206,25 @@
   }
 
   function getAdjustedFinancial() {
-    if (!state || !state.summary.financial) return null;
-    var validated = validatedAnomalies();
-    if (!validated.length) return state.summary.financial;
-    var adj = CNS.sumFinancialAdjustments(validated);
-    return CNS.applyFinancialAdjustments(state.summary.financial, adj);
-  }
-
-  function getAdjustedFinancial() {
     var vs = getViewState();
     if (!vs || !vs.summary.financial) return null;
+    var fin;
     var validated = validatedAnomalies();
-    if (!validated.length) return vs.summary.financial;
-    var adj = CNS.sumFinancialAdjustments(validated);
-    return CNS.applyFinancialAdjustments(vs.summary.financial, adj);
+    if (!validated.length) fin = vs.summary.financial;
+    else {
+      fin = CNS.applyFinancialAdjustments(vs.summary.financial,
+        CNS.sumFinancialAdjustments(validated));
+    }
+    enrichFinCashCollect(fin, vs);
+    return fin;
+  }
+
+  function enrichFinCashCollect(fin, viewState) {
+    if (!fin || !fin.cash_to_collect || !viewState || !viewState.pos) return fin;
+    CNS.enrichCashToCollectByUser(
+      fin.cash_to_collect, viewState.pos, viewState.glovo, viewState.naps,
+      viewState.site, CNS.listPosDates(viewState.pos));
+    return fin;
   }
 
   function renderDayTabs() {
@@ -418,6 +423,60 @@
           "</div>";
       }).join("") + "</div>";
     }
+
+    if (cc.by_user && cc.by_user.length) {
+      var withNet = cc.by_user.filter(function (u) {
+        return Math.abs(u.net_to_collect) >= 0.5 || u.to_collect >= 0.5 || u.over_recorded >= 0.5;
+      });
+      if (withNet.length) {
+        html += "<h3 class='cc-user-title'>Par utilisateur (colonne F du POS)</h3>";
+        html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
+          "<th>Utilisateur</th><th>À collecter</th><th>Sur-saisie</th><th>Net</th>" +
+          "<th>Glovo Cash</th><th>Site emporter</th><th>TPE CB</th></tr></thead><tbody>";
+        withNet.forEach(function (u) {
+          var bl = u.by_line || {};
+          var netCls = u.net_to_collect > 0 ? "cc-ecart-pos" :
+            (u.net_to_collect < 0 ? "cc-ecart-neg" : "");
+          html += "<tr><td><b>" + escapeHtml(u.user) + "</b></td>" +
+            "<td>" + fmtDH(u.to_collect) + "</td>" +
+            "<td>" + (u.over_recorded > 0 ? fmtDH(u.over_recorded) : "—") + "</td>" +
+            "<td class='" + netCls + "'><b>" +
+            (u.net_to_collect > 0 ? "+" + fmtDH(u.net_to_collect) : fmtDH(u.net_to_collect)) +
+            "</b></td>" +
+            "<td>" + fmtDH(bl.glovo_cash || 0) + "</td>" +
+            "<td>" + fmtDH(bl.site_cash || 0) + "</td>" +
+            "<td>" + fmtDH(bl.naps_tpe_over || 0) + "</td></tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+    }
+
+    if (cc.ticket_contributions && cc.ticket_contributions.length) {
+      var ticketRows = cc.ticket_contributions.filter(function (t) {
+        return Math.abs(t.amount) >= 0.5;
+      });
+      if (ticketRows.length) {
+        html += "<h3 class='cc-user-title'>Détail par ticket</h3>";
+        html += '<div class="table-wrap"><table class="cc-user-table"><thead><tr>' +
+          "<th>Utilisateur</th><th>Date/heure</th><th>Ticket</th><th>Source</th>" +
+          "<th>Montant (DH)</th><th>Détail</th></tr></thead><tbody>";
+        ticketRows.forEach(function (t) {
+          var amtCls = t.amount > 0 ? "cc-ecart-pos" : "cc-ecart-neg";
+          var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
+            (t.lineKey === "site_cash" ? "Site emporter" :
+              (t.lineKey === "naps_tpe_over" ? "TPE CB" : t.lineKey));
+          html += "<tr><td>" + escapeHtml(t.user || "Non attribué") + "</td>" +
+            "<td>" + escapeHtml(t.when || "") + "</td>" +
+            "<td>" + escapeHtml(t.ticket_name || t.ticket_no || "—") + "</td>" +
+            "<td>" + escapeHtml(lineLbl) + "</td>" +
+            "<td class='" + amtCls + "'><b>" + fmtDH(t.amount) + "</b></td>" +
+            "<td class='muted' style='font-size:.82rem'>" + escapeHtml(t.detail || "") +
+            "</td></tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+    }
+
     content.innerHTML = html;
   }
 
@@ -847,9 +906,14 @@
     function adjustedFinFor(runResult) {
       if (!runResult.summary.financial) return null;
       var validated = runResult.anomalies.filter(function (a) { return isValidated(a.id); });
-      if (!validated.length) return runResult.summary.financial;
-      var adj = CNS.sumFinancialAdjustments(validated);
-      return CNS.applyFinancialAdjustments(runResult.summary.financial, adj);
+      var fin;
+      if (!validated.length) fin = runResult.summary.financial;
+      else {
+        fin = CNS.applyFinancialAdjustments(runResult.summary.financial,
+          CNS.sumFinancialAdjustments(validated));
+      }
+      enrichFinCashCollect(fin, runResult);
+      return fin;
     }
 
     function buildFinRows(runFin) {
@@ -913,6 +977,54 @@
       return rows;
     }
 
+    function buildCashCollectUserRows(runFin) {
+      if (!runFin || !runFin.cash_to_collect || !runFin.cash_to_collect.by_user) return [];
+      var cc = runFin.cash_to_collect;
+      var rows = [
+        ["Cash à collecter — par utilisateur (col. F POS)"],
+        ["Utilisateur", "À collecter", "Sur-saisie", "Net", "Glovo Cash", "Site emporter", "TPE CB"],
+      ];
+      cc.by_user.forEach(function (u) {
+        var bl = u.by_line || {};
+        rows.push([
+          u.user,
+          u.to_collect,
+          u.over_recorded,
+          u.net_to_collect,
+          Math.round(bl.glovo_cash || 0),
+          Math.round(bl.site_cash || 0),
+          Math.round(bl.naps_tpe_over || 0),
+        ]);
+      });
+      return rows;
+    }
+
+    function buildCashCollectTicketRows(runFin) {
+      if (!runFin || !runFin.cash_to_collect || !runFin.cash_to_collect.ticket_contributions) {
+        return [];
+      }
+      var rows = [
+        ["Cash à collecter — détail tickets"],
+        ["Utilisateur", "Date/heure", "N° POS", "Ticket name", "Source", "Montant (DH)", "Détail"],
+      ];
+      runFin.cash_to_collect.ticket_contributions.forEach(function (t) {
+        if (Math.abs(t.amount) < 0.5) return;
+        var lineLbl = t.lineKey === "glovo_cash" ? "Glovo Cash" :
+          (t.lineKey === "site_cash" ? "Site emporter" :
+            (t.lineKey === "naps_tpe_over" ? "TPE CB > NAPS" : t.lineKey));
+        rows.push([
+          t.user || "Non attribué",
+          t.when || "",
+          t.ticket_no || "",
+          t.ticket_name || "",
+          lineLbl,
+          Math.round(t.amount),
+          t.detail || "",
+        ]);
+      });
+      return rows;
+    }
+
     function toRow(a, validated) {
       return {
         "Validée": validated ? "Oui" : "Non",
@@ -943,6 +1055,15 @@
       if (fin.cash_to_collect) {
         XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
           buildCashCollectRows(fin)), "Cash à collecter");
+        if (fin.cash_to_collect.by_user && fin.cash_to_collect.by_user.length) {
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+            buildCashCollectUserRows(fin)), "Cash par utilisateur");
+        }
+        if (fin.cash_to_collect.ticket_contributions &&
+            fin.cash_to_collect.ticket_contributions.length) {
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+            buildCashCollectTicketRows(fin)), "Cash tickets détail");
+        }
       }
     }
 
@@ -1010,6 +1131,15 @@
           if (dayFin.cash_to_collect) {
             XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
               buildCashCollectRows(dayFin)), sheetSafe(dayLabel + " Cash"));
+            if (dayFin.cash_to_collect.by_user && dayFin.cash_to_collect.by_user.length) {
+              XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+                buildCashCollectUserRows(dayFin)), sheetSafe(dayLabel + " Cash user"));
+            }
+            if (dayFin.cash_to_collect.ticket_contributions &&
+                dayFin.cash_to_collect.ticket_contributions.length) {
+              XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+                buildCashCollectTicketRows(dayFin)), sheetSafe(dayLabel + " Cash tickets"));
+            }
           }
         }
         appendAnomalySheets(dayRun, dayLabel);

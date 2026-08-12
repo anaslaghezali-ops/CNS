@@ -610,6 +610,21 @@ ticket CB non rattaché avec ligne NAPS correspondante = sur place/emporter.
 
 ---
 
+### 2026-08-12 — Cash à collecter ventilé par utilisateur POS (col. F)
+
+**Demandé par** : gérant — savoir **chez qui** récupérer le cash (qui a fait l’erreur).
+
+**Règles** : chaque écart cash à collecter est rattaché au **User** du ticket POS (colonne F) :
+- Glovo Cash : sous-saisie / commande absente / sur-saisie par ticket
+- Site emporter : écart comptoir par ticket site
+- TPE CB &gt; NAPS : tickets CB sans ligne NAPS
+
+**UI** : tableaux par utilisateur + détail tickets · Excel `Cash par utilisateur` / `Cash tickets détail`.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
