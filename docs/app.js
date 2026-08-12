@@ -332,14 +332,10 @@
     period.innerHTML = txt;
 
     var ch = sm.channels;
-    var keys = Object.keys(ch);
-    var max = Math.max.apply(null, keys.map(function (k) { return ch[k]; })) || 1;
-    document.getElementById("chart").innerHTML = keys.map(function (k) {
-      var h = Math.round((ch[k] / max) * 100);
-      return '<div class="bar"><div class="bar-val">' + ch[k] +
-             '</div><div class="fill" style="height:' + h + '%"></div>' +
-             '<div class="bar-label">' + escapeHtml(k) + "</div></div>";
-    }).join("");
+    document.getElementById("channels").innerHTML = "Tickets POS par canal : " +
+      Object.keys(ch).sort(function (a, b) { return ch[b] - ch[a]; }).map(function (k) {
+        return "<b>" + escapeHtml(k) + "</b> " + ch[k];
+      }).join(" · ");
 
     renderPaymentBreakdown(vs.summary.financial);
     renderCashToCollect(getAdjustedFinancial());

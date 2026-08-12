@@ -767,6 +767,18 @@ l'écart financier Glovo Online de 190 DH et l'écart de nombre 48/47 se résorb
 
 ---
 
+### 2026-08-12 — Suppression du graphique des canaux
+
+**Demandé par** : gérant — graphique à barres (Glovo / SP&EMP / Site) inutile.
+
+**Fix** : remplacé par une ligne texte « Tickets POS par canal : Glovo 75 · … »
+(`#chart` → `#channels`), CSS `.chart` / `.bar` supprimé. L'export Excel garde le
+détail par canal.
+
+**Fichiers** : `docs/index.html`, `docs/app.js`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
