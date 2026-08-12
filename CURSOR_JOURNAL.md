@@ -107,6 +107,40 @@ Streamlit Python).
 
 ---
 
+### 2026-08-12 — Validation des anomalies (hors calcul)
+
+**Demandé par** : gérant / utilisateur (session Cursor).
+
+**Problème** : une fois une anomalie traitée en caisse, elle restait dans les
+compteurs et dans l'écart financier.
+
+**Règle appliquée** :
+
+- Bouton **✅ Valider** sur chaque anomalie (Haute + Moyenne).
+- Validée → masquée de la liste active, section **Anomalies validées** avec
+  **↩ Annuler**.
+- **Vue d'ensemble** : recompte anomalies / gravités sans les validées.
+- **Réconciliation financière** : ajustement des montants selon le type
+  d'anomalie (ex. commande absente du POS → retire le montant côté source ;
+  ticket POS orphelin → retire côté POS ; doublon → retire le surplus ; etc.).
+- **POS annoté** : statut du ticket mis à jour si toutes ses anomalies sont
+  validées.
+- Export Excel : colonne « Validée », montants financiers ajustés.
+
+**Fichiers modifiés** :
+
+| Fichier | Changement |
+|---------|------------|
+| `docs/reconcile.js` | `anomaly.id`, `financialAdjustment`, `applyFinancialAdjustments` |
+| `docs/app.js` | UI validation, recompte, export |
+| `docs/index.html` | Section validées + texte d'aide |
+| `docs/style.css` | Boutons valider / annuler |
+
+**Note** : les validations sont **réinitialisées** à chaque nouvelle
+réconciliation (nouveau clic « Lancer »). Pas de persistance entre sessions.
+
+---
+
 ### Antérieur (branche `claude/chicknster-reconciliation-system-460chx`)
 
 Modifications déjà présentes **avant** la session Cursor du 12 août — ne pas
