@@ -160,7 +160,8 @@
       var cls = Math.abs(l.ecart) < 0.5 ? "st-ok" : "st-anom";
       var sign = l.ecart > 0 ? "+" : "";
       var note = l.note ? "<div class='muted' style='font-size:.82rem'>" + escapeHtml(l.note) + "</div>" : "";
-      return "<tr><td><b>" + escapeHtml(l.source) + "</b></td>" +
+      var rowCls = l.isTotal ? "fin-total" : (l.group === "glovo" ? "fin-glovo-sub" : "");
+      return "<tr class='" + rowCls + "'><td><b>" + escapeHtml(l.source) + "</b></td>" +
              "<td>" + escapeHtml(l.pos_label) + " : <b>" + fmtDH(l.pos) + "</b></td>" +
              "<td>" + escapeHtml(l.src_label) + " : <b>" + fmtDH(l.src) + "</b>" + note + "</td>" +
              "<td class='" + cls + "'><b>" + sign + fmtDH(l.ecart) + "</b></td></tr>";

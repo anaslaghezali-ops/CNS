@@ -92,6 +92,9 @@ tbody tr:hover { background: #fbfbfb; }
 .sev-info { background: var(--info); }
 .st-ok { color: var(--ok-b); font-weight: 600; }
 .st-anom { color: var(--red); font-weight: 600; }
+.fin-glovo-sub td { background: #faf8f5; }
+.fin-glovo-sub td:first-child { padding-left: 18px; }
+.fin-total td { background: #f3ebe8; border-top: 2px solid var(--line); font-weight: 600; }
 .row-anom td { background: var(--anom); }
 .only-anom { display: inline-block; margin: 8px 0; font-size: .9rem; cursor: pointer; }
 

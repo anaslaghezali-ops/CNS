@@ -846,6 +846,20 @@
       return pos.reduce(function (a, p) {
         return a + (p.channel === channel && !isNaN(p.total) ? p.total : 0); }, 0);
     }
+    function sumPosGlovoPay(pay) {
+      return pos.reduce(function (a, p) {
+        return a + (p.channel === CH_GLOVO && p.payment_type === pay && !isNaN(p.total) ? p.total : 0);
+      }, 0);
+    }
+    function sumGlovoDelivered(pay) {
+      if (!glovo) return 0;
+      return glovo.reduce(function (a, g) {
+        if ((g.status || "").toLowerCase() !== "delivered") return a;
+        if (g.payment_type !== pay) return a;
+        return a + (isNaN(g.amount) ? 0 : g.amount);
+      }, 0);
+    }
+
     var posCC = byPayment["Credit card"];
     var napsTotal = 0;
     if (naps) naps.forEach(function (n) {
@@ -862,8 +876,28 @@
     var lines = [];
     if (naps) lines.push({ source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
       pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC });
-    if (glovo) lines.push({ source: "🛵 Glovo", pos_label: "POS tickets Glovo",
-      pos: posGlovo, src_label: "Glovo (W − AE)", src: glovoW, ecart: glovoW - posGlovo });
+    if (glovo) {
+      var posGlovoBT = sumPosGlovoPay("Bank Transfer");
+      var posGlovoCash = sumPosGlovoPay("Cash");
+      var glovoOnline = sumGlovoDelivered("Online");
+      var glovoCash = sumGlovoDelivered("Cash");
+      lines.push({
+        source: "🛵 Glovo — Online", pos_label: "POS Glovo « Bank Transfer »",
+        pos: posGlovoBT, src_label: "Glovo Online (W − AE)", src: glovoOnline,
+        ecart: glovoOnline - posGlovoBT, group: "glovo",
+      });
+      lines.push({
+        source: "🛵 Glovo — Cash", pos_label: "POS Glovo « Cash »",
+        pos: posGlovoCash, src_label: "Glovo Cash (W − AE)", src: glovoCash,
+        ecart: glovoCash - posGlovoCash, group: "glovo",
+      });
+      lines.push({
+        source: "🛵 Glovo — Total", pos_label: "POS tickets Glovo (tous paiements)",
+        pos: posGlovo, src_label: "Glovo livrées (W − AE)", src: glovoW,
+        ecart: glovoW - posGlovo, group: "glovo", isTotal: true,
+        note: "Écart total = Online + Cash (voir lignes ci-dessus pour le détail).",
+      });
+    }
     if (site) lines.push({ source: "🌐 Site", pos_label: "POS tickets Site",
       pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite });
 
