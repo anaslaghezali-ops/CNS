@@ -53,8 +53,10 @@ with st.expander("ℹ️ Comment ça marche ?", expanded=False):
         - Glovo : `Online`→`Bank Transfer`, `Cash`→`Cash` · montant col W ·
           saisie ≤ 10 min après réception.
         - NAPS : toutes en `Credit card`, rapprochées par date + montant.
-        - Site : identifiant = ticket name · livrée = présente au POS en
-          `Bank Transfer` · refusée = absente.
+        - Site : identifiant = ticket name · une commande **livrée** doit être
+          présente au POS en `Bank Transfer` (sinon on cherche une faute de
+          frappe sur le n°). Une commande **non livrée** peut être présente
+          (tapée puis annulée) — ce n'est pas une anomalie.
         - Sur place / emporter : `Cash` ou `Credit card`.
         """
     )

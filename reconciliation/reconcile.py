@@ -107,16 +107,8 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                     source_ref=sid, payment_pos=pos_row["payment_type"],
                     payment_source=SITE_EXPECTED_PAYMENT,
                 ))
-        elif pos_row is not None:
-            # Commande non livrée (refusée) : ne doit PAS être au POS
-            matched_pos_names.add(sid)
-            anomalies.append(_anomaly(
-                "Site", "haute", "Commande non livrée mais tapée au POS",
-                f"Commande site {sid} refusée/non livrée "
-                f"(statut '{s.get('last_status','')}') mais présente au POS.",
-                ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                source_ref=sid, amount_pos=pos_row["total"],
-            ))
+        # Une commande non livrée (refusée/annulée) PEUT être présente au POS
+        # (tapée puis annulée) : ce n'est PAS une anomalie.
 
     # Commandes livrées introuvables : tenter une faute de frappe sur le numéro.
     for s in unmatched_delivered:

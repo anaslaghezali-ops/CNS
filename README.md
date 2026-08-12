@@ -51,9 +51,9 @@ accessible à :
 
 ## Anomalies détectées
 
-- 🔴 Commande source **absente** du POS (non tapée)
+- 🔴 Commande **livrée absente** du POS (non tapée)
 - 🔴 **Mauvais mode de paiement** au POS
-- 🔴 Commande Site **refusée mais tapée** au POS
+- 🟠 **Numéro de commande mal saisi** (faute de frappe sur le n° de ticket)
 - 🟠 **Écart de montant**
 - 🟠 Ticket POS **non rattachable** à une source
 - 🟠 Journée **non couverte** par le relevé NAPS (décalage de télécollecte)

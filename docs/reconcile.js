@@ -233,14 +233,9 @@
             ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
             payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
         }
-      } else if (p) {
-        anomalies.push(anomaly({ source: "Site", severity: "haute",
-          type: "Commande non livrée mais tapée au POS",
-          detail: "Commande site " + sid + " refusée/non livrée (statut '" +
-                  o.last_status + "') mais présente au POS.",
-          ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-          amount_pos: p.total }));
       }
+      // Une commande non livrée (refusée/annulée) PEUT être présente au POS
+      // (tapée puis annulée) : ce n'est PAS une anomalie.
     });
 
     // Commandes livrées introuvables : tenter une faute de frappe sur le numéro.
