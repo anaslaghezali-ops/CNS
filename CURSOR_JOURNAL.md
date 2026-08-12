@@ -651,6 +651,15 @@ le plus proche en temps (mauvais montant) volait la commande.
 
 ---
 
+### 2026-08-12 — Anomalies Glovo : heure de réception dans le détail
+
+**Demandé par** : gérant — sur écart de montant / mode incorrect, afficher l’heure
+Glovo comme l’heure POS (« reçue à 21:22 » vs « ticket 16 à 21:34 »).
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

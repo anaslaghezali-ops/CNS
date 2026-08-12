@@ -145,6 +145,10 @@
   function dtFull(d) {
     return d ? dateKey(d) + " " + hhmm(d) : "";
   }
+  function glovoReceivedAtLabel(g) {
+    if (!g || !g.received_at) return "";
+    return "reçue à " + hhmm(g.received_at);
+  }
   function roundDH(v) {
     if (v == null || isNaN(v)) return null;
     return Math.round(v);
@@ -833,7 +837,9 @@
       anomalies.push(posAnomaly(p, { source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
         detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
-                g.amount.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
+                g.amount.toFixed(0) + " DH" +
+                (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") + ") : attendu '" + exp +
+                "' au POS, trouvé '" +
                 p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
                 " à " + hhmm(p.datetime) + ").",
         source_ref: g.order_id,
@@ -917,7 +923,8 @@
       }
       anomalies.push(posAnomaly(p, { source: "Glovo", severity: "moyenne",
         type: "Écart de montant",
-        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ") : " +
+        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type +
+                (g.received_at ? ", " + glovoReceivedAtLabel(g) : "") + ") : " +
                 g.amount.toFixed(0) + " DH (W−AE) vs " + p.total.toFixed(0) +
                 " DH au POS (ticket " + (p.ticket_name || p.ticket_no) + " à " +
                 hhmm(p.datetime) + ")." + note,
