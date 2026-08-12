@@ -660,6 +660,17 @@ Glovo comme l’heure POS (« reçue à 21:22 » vs « ticket 16 à 21:34 »).
 
 ---
 
+### 2026-08-12 — Journée POS 03:00 → 02:59 (pas minuit)
+
+**Demandé par** : gérant — commande Glovo 23:59 tapée après minuit = même journée caisse.
+
+**Règle** : date POS = `posBusinessDateKey` (ticket − 3 h). Onglets journaliers,
+filtre Glovo/Site sur la période POS, ventilation cash/NAPS POS côté caisse.
+
+**Fichiers** : `docs/reconcile.js`, `docs/index.html`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
