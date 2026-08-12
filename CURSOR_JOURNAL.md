@@ -558,6 +558,18 @@ financière compare les **montants** en DH (peuvent être égaux avec un ticket 
 
 ---
 
+### 2026-08-12 — Bipeur SP&EMP vs faux Glovo (ex. ticket « 14 » CB + NAPS)
+
+**Cas** : ticket POS `14` classé Glovo (1–3 chiffres) sans commande Glovo, mais 230 DH CB
+sur NAPS sans doublon → bipeur sur place, pas vol.
+
+**Règle** : si orphelin Glovo + numéro 1–3 chiffres + CB + **une seule** ligne NAPS au même
+montant sur la journée → reclasse **SP&EMP** (`spemp_bipeur`), info au lieu d’anomalie Glovo.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

@@ -521,7 +521,10 @@
       var kind = r.kind === "a_rattacher" ?
         "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#fff3e6;" +
         "border:1px solid #e8d4b8;color:#8b5a2b'>À rattacher</span>" :
-        "<span class='muted'>Libellé libre → SP&EMP</span>";
+        (r.kind === "bipeur" ?
+          "<span style='font-size:.78rem;padding:2px 8px;border-radius:4px;background:#e8f6ef;" +
+          "border:1px solid #a8d5c2;color:#1e6b45'>Bipeur SP&EMP</span>" :
+          "<span class='muted'>Libellé libre → SP&EMP</span>");
       html += "<tr><td>" + escapeHtml(r.when || "") + "</td><td>" +
         escapeHtml(r.ticket_name) + "</td><td>" + escapeHtml(r.ticket_no) + "</td><td><b>" +
         (r.total == null || isNaN(r.total) ? "—" : fmtDH(r.total)) + "</b></td><td>" +
@@ -952,6 +955,18 @@
     }
 
     appendAnomalySheets(state, "");
+
+    if (state.spemp_review && state.spemp_review.length) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+        state.spemp_review.map(function (r) {
+          return {
+            "Date/heure": r.when, "Ticket name": r.ticket_name, "N° POS": r.ticket_no,
+            "Total": r.total, "Paiement": r.payment_type,
+            "Type": r.kind === "a_rattacher" ? "À rattacher" :
+              (r.kind === "bipeur" ? "Bipeur SP&EMP (NAPS OK)" : "Libellé libre (SP&EMP)"),
+          };
+        })), "SP&EMP hors Glovo-Site");
+    }
 
     if (state.byDay && Object.keys(state.byDay).length > 1) {
       Object.keys(state.byDay).sort().forEach(function (dk) {
