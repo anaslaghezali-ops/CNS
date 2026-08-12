@@ -69,9 +69,19 @@
       <p class="muted" style="margin-top:18px">Répartition des montants POS par <b>mode de paiement × canal</b> (d'où vient l'argent) :</p>
       <div class="table-wrap"><table id="fin-matrix"></table></div>
 
+      <section id="naps-balanced-section" class="hidden naps-balanced-block">
+        <h2>✅ TPE (NAPS) — Totaux alignés</h2>
+        <p class="muted">
+          <b>Pas d'écart financier</b> : le total POS « Credit card » = le total relevé NAPS sur la journée.
+          Les lignes ci-dessous sont des <b>écarts d'appariement</b> (montants transaction par transaction différents,
+          ex. 110 DH au POS vs 95 + 15 DH sur le TPE). Vous n'avez rien à corriger côté caisse.
+        </p>
+        <div id="naps-balanced-content"></div>
+      </section>
+
       <hr />
       <h2>🚨 Anomalies</h2>
-      <p class="muted">Éléments à corriger (Haute + Moyenne). Clique sur <b>✅ Valider</b> une fois traité : l'anomalie sort des calculs (vue d'ensemble + réconciliation financière). Les rattachements et notes sont dans « Infos ».</p>
+      <p class="muted">Éléments à corriger (Haute + Moyenne). Les lignes d'appariement TPE avec totaux alignés sont listées dans la section <b>✅ TPE — Totaux alignés</b> ci-dessus. Clique sur <b>✅ Valider</b> une fois traité : l'anomalie sort des calculs (vue d'ensemble + réconciliation financière). Les rattachements et notes sont dans « Infos ».</p>
       <div class="filters">
         <div>
           <span class="filter-label">Gravité :</span>

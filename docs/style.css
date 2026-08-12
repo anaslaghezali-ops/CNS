@@ -136,4 +136,30 @@ tbody tr:hover { background: #fbfbfb; }
 .fin-contrib-table { font-size: .84rem; margin-top: 8px; }
 .fin-contrib-table th { background: #8b5a2b; }
 
+.naps-balanced-block {
+  margin: 20px 0; padding: 16px 18px; background: #e8f6ef;
+  border: 2px solid #3d9a6a; border-radius: 10px;
+}
+.naps-balanced-block h2 { margin: 0 0 8px; color: #1e6b45; font-size: 1.15rem; }
+.naps-balanced-day {
+  margin-top: 14px; padding: 12px 14px; background: #fff;
+  border: 1px solid #b8dfc8; border-radius: 8px;
+}
+.naps-balanced-day h3 { margin: 0 0 8px; font-size: .98rem; color: #1e6b45; }
+.naps-balanced-totals {
+  display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 12px;
+  font-size: .92rem;
+}
+.naps-balanced-totals .tot { font-weight: 700; }
+.naps-balanced-totals .match { color: var(--ok-b); }
+.naps-balanced-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 700px) { .naps-balanced-cols { grid-template-columns: 1fr; } }
+.naps-balanced-cols h4 { margin: 0 0 6px; font-size: .85rem; color: #555; }
+.naps-balanced-cols ul { margin: 0; padding-left: 18px; font-size: .88rem; }
+.row-naps-ok td { background: #f4fbf7; }
+.badge-naps-ok {
+  display: inline-block; font-size: .75rem; padding: 2px 8px; border-radius: 4px;
+  background: #d4edda; color: #1e6b45; border: 1px solid #a8d5c2; font-weight: 600;
+}
+
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }

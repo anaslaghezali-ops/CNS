@@ -492,6 +492,90 @@
     return anomalies;
   }
 
+  /** Date d'une anomalie d'appariement NAPS (POS ou relevé). */
+  function napsPairingAnomalyDate(a) {
+    if (a.pos_datetime) return dateKey(a.pos_datetime);
+    var w = a.when || "";
+    if (/^\d{4}-\d{2}-\d{2}/.test(w)) return w.slice(0, 10);
+    if (a.source_ref && /^\d{4}-\d{2}-\d{2}/.test(a.source_ref)) return a.source_ref.slice(0, 10);
+    return "";
+  }
+
+  var NAPS_PAIRING_TYPES = ["Paiement POS absent du TPE", "Transaction TPE absente du POS"];
+
+  /**
+   * Journées où total POS CB = total NAPS mais l'appariement transaction par transaction échoue
+   * (ex. 110 DH au POS vs 95+15 DH sur le TPE) — pas d'écart financier réel.
+   */
+  function buildNapsBalancedPairing(pos, naps, anomalies) {
+    if (!naps || !naps.length) return [];
+    var pairing = anomalies.filter(function (a) {
+      return a.source === "NAPS" && NAPS_PAIRING_TYPES.indexOf(a.type) >= 0;
+    });
+    if (!pairing.length) return [];
+
+    var dates = {};
+    pairing.forEach(function (a) {
+      var d = napsPairingAnomalyDate(a);
+      if (d) dates[d] = true;
+    });
+
+    var groups = [];
+    Object.keys(dates).sort().forEach(function (d) {
+      var dayPairing = pairing.filter(function (a) { return napsPairingAnomalyDate(a) === d; });
+      if (!dayPairing.length) return;
+
+      var posCC = pos.filter(function (p) {
+        return p.payment_type === "Credit card" && dateKey(p.datetime) === d;
+      });
+      var posTotal = posCC.reduce(function (s, p) {
+        return s + (isNaN(p.total) ? 0 : p.total); }, 0);
+      var napsDay = naps.filter(function (n) { return n.date === d; });
+      var napsTotal = napsDay.reduce(function (s, n) {
+        return s + (isNaN(n.montant) ? 0 : n.montant); }, 0);
+
+      if (Math.abs(Math.round(posTotal) - Math.round(napsTotal)) >= 1) return;
+
+      var posItems = [], napsItems = [], posUnmatched = 0, napsUnmatched = 0;
+      dayPairing.forEach(function (a) {
+        if (a.type === "Paiement POS absent du TPE") {
+          var ap = a.amount_pos || 0;
+          posUnmatched += ap;
+          posItems.push({
+            id: a.id, ticket_no: a.pos_ticket_no, amount: ap,
+            ticket_name: a.ticket_name, when: a.when,
+          });
+        } else {
+          var as = a.amount_source || 0;
+          napsUnmatched += as;
+          napsItems.push({ id: a.id, row: a.row, amount: as, when: a.when });
+        }
+      });
+
+      groups.push({
+        date: d,
+        pos_cc_total: Math.round(posTotal),
+        naps_total: Math.round(napsTotal),
+        pos_unmatched_total: Math.round(posUnmatched),
+        naps_unmatched_total: Math.round(napsUnmatched),
+        pos_items: posItems,
+        naps_items: napsItems,
+        anomaly_ids: dayPairing.map(function (a) { return a.id; }),
+      });
+    });
+    return groups;
+  }
+
+  function markNapsTotalsOk(anomalies, groups) {
+    groups.forEach(function (g) {
+      g.anomaly_ids.forEach(function (id) {
+        anomalies.forEach(function (a) {
+          if (a.id === id) a.naps_totals_ok = true;
+        });
+      });
+    });
+  }
+
   // ----------------------------------------------------------------------- //
   // GLOVO
   // ----------------------------------------------------------------------- //
@@ -1362,6 +1446,9 @@
     enrichProductConfirmation(anomalies, pos, glovo);
 
     annotate(pos, anomalies);
+    var naps_balanced = naps ? buildNapsBalancedPairing(pos, naps, anomalies) : [];
+    markNapsTotalsOk(anomalies, naps_balanced);
+
     var summary = buildSummary(pos, anomalies, glovo, naps, site);
     var dates = Array.from(posDates).sort();
     summary.pos_date_min = dates.length ? dates[0] : "";
@@ -1369,7 +1456,7 @@
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
     summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
-    return { anomalies: anomalies, pos: pos, summary: summary };
+    return { anomalies: anomalies, pos: pos, summary: summary, naps_balanced: naps_balanced };
   }
 
   function listPosDates(pos) {

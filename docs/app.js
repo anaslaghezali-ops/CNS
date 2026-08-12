@@ -180,17 +180,28 @@
     }
   }
 
+  function isNapsTotalsOk(a) {
+    return a && a.naps_totals_ok;
+  }
+
+  function isActionableAnomaly(a) {
+    return a.severity !== "info" && !isNapsTotalsOk(a);
+  }
+
   function recomputeCounts() {
     var active = activeAnomalies();
     var sev = { haute: 0, moyenne: 0, info: 0 };
+    var napsPairing = 0;
     active.forEach(function (a) {
-      sev[a.severity] = (sev[a.severity] || 0) + 1;
+      if (isNapsTotalsOk(a) && a.severity !== "info") napsPairing++;
+      else sev[a.severity] = (sev[a.severity] || 0) + 1;
     });
     return {
       n_anomalies: sev.haute + sev.moyenne,
       n_infos: sev.info,
       severity: sev,
       n_validated: validatedAnomalies().length,
+      n_naps_pairing_ok: napsPairing,
     };
   }
 
@@ -258,6 +269,9 @@
     if (counts.n_validated) {
       metrics.push(["✅ Validées (hors calcul)", counts.n_validated]);
     }
+    if (counts.n_naps_pairing_ok) {
+      metrics.push(["✅ TPE totaux OK (appariement)", counts.n_naps_pairing_ok]);
+    }
     document.getElementById("metrics").innerHTML = metrics.map(function (m) {
       return '<div class="metric"><div class="label">' + m[0] +
              '</div><div class="value">' + m[1] + "</div></div>";
@@ -294,6 +308,7 @@
     }).join("");
 
     renderFinancial(getAdjustedFinancial());
+    renderNapsBalanced();
 
     var sources = uniq(activeAnomalies().map(function (a) { return a.source; }));
     var wrap = document.getElementById("fsrc-wrap");
@@ -342,6 +357,13 @@
       var cls = Math.abs(l.ecart) < 0.5 ? "st-ok" : "st-anom";
       var sign = l.ecart > 0 ? "+" : "";
       var note = l.note ? "<div class='muted' style='font-size:.82rem'>" + escapeHtml(l.note) + "</div>" : "";
+      if (l.lineKey === "naps" && Math.abs(l.ecart) < 0.5) {
+        var vs = getViewState();
+        if (vs && vs.naps_balanced && vs.naps_balanced.length) {
+          note += "<div class='muted' style='font-size:.82rem;margin-top:4px'>" +
+            "✅ <b>Totaux alignés</b> — écarts d'appariement seulement (voir section ci-dessous).</div>";
+        }
+      }
       var rowCls = l.isTotal ? "fin-total" : (l.group === "glovo" ? "fin-glovo-sub" : "");
       var contribs = l.lineKey ? CNS.getFinancialContributors(l.lineKey, activeAnomalies()) : [];
       var detailCell = "";
@@ -389,6 +411,51 @@
       return "<td><b>" + fmtDH(colTot[p]) + "</b></td>"; }).join("") +
       "<td><b>" + fmtDH(grand) + "</b></td></tr></tbody>";
     document.getElementById("fin-matrix").innerHTML = mhead + mbody;
+  }
+
+  function renderNapsBalanced() {
+    var section = document.getElementById("naps-balanced-section");
+    var content = document.getElementById("naps-balanced-content");
+    var vs = getViewState();
+    var groups = vs && vs.naps_balanced ? vs.naps_balanced : [];
+    if (!groups.length) {
+      section.classList.add("hidden");
+      content.innerHTML = "";
+      return;
+    }
+    section.classList.remove("hidden");
+    content.innerHTML = groups.map(function (g) {
+      var dayLabel = fmtDayLabel(g.date);
+      var posList = g.pos_items.map(function (it) {
+        var lbl = it.ticket_name ? escapeHtml(it.ticket_name) : "ticket";
+        if (it.ticket_no) lbl += " #" + escapeHtml(it.ticket_no);
+        if (it.when) lbl += " · " + escapeHtml(String(it.when).match(/\d{2}:\d{2}/) ?
+          String(it.when).match(/\d{2}:\d{2}/)[0] : "");
+        return "<li><b>" + Math.round(it.amount) + " DH</b> — " + lbl + "</li>";
+      }).join("");
+      var napsList = g.naps_items.map(function (it) {
+        return "<li><b>" + Math.round(it.amount) + " DH</b> — ligne relevé " +
+          escapeHtml(it.row === "" || it.row == null ? "?" : it.row) + "</li>";
+      }).join("");
+      return '<div class="naps-balanced-day">' +
+        "<h3>📅 " + escapeHtml(dayLabel) + " — <span class='match'>✅ pas d'écart</span></h3>" +
+        '<div class="naps-balanced-totals">' +
+        '<span class="tot">POS Credit card : <b>' + g.pos_cc_total + " DH</b></span>" +
+        '<span class="tot">Relevé NAPS : <b>' + g.naps_total + " DH</b></span>" +
+        '<span class="tot match">Écart financier : <b>0 DH</b></span>' +
+        "</div>" +
+        "<p class='muted' style='font-size:.88rem;margin:0 0 10px'>" +
+        "Montants non appariés transaction par transaction : " +
+        "<b>" + g.pos_unmatched_total + " DH</b> au POS ↔ " +
+        "<b>" + g.naps_unmatched_total + " DH</b> sur le TPE — " +
+        "les totaux se compensent.</p>" +
+        '<div class="naps-balanced-cols">' +
+        "<div><h4>Côté POS (sans ligne TPE au même montant)</h4><ul>" +
+        (posList || "<li>—</li>") + "</ul></div>" +
+        "<div><h4>Côté TPE (sans ticket POS au même montant)</h4><ul>" +
+        (napsList || "<li>—</li>") + "</ul></div>" +
+        "</div></div>";
+    }).join("");
   }
 
   function renderFinEcartDetail(fin) {
@@ -443,23 +510,30 @@
     bindValidateButtons(panel);
   }
 
-  function _tableHTML(rows, withValidate) {
+  function _anomalyRowHTML(a, withValidate, napsOkBadge) {
+    var rowCls = napsOkBadge && isNapsTotalsOk(a) ? " row-naps-ok" : "";
+    var badge = napsOkBadge && isNapsTotalsOk(a) ?
+      " <span class='badge-naps-ok'>✅ Totaux OK</span>" : "";
+    var btn = withValidate ?
+      '<td><button type="button" class="btn-validate" data-id="' + escapeHtml(a.id) +
+      '" title="Valider — hors calcul">✅ Valider</button></td>' : "";
+    return "<tr class='" + rowCls + "'>" + btn +
+      "<td><span class='sev-badge sev-" + a.severity + "'>" +
+      SEV_BADGE[a.severity] + "</span></td><td>" + escapeHtml(a.source) +
+      "</td><td>" + escapeHtml(a.type) + badge + "</td><td>" + escapeHtml(a.file || "") +
+      "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
+      "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
+      escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+  }
+
+  function _tableHTML(rows, withValidate, napsOkBadge) {
     var head = "<thead><tr>";
     if (withValidate) head += "<th>Valider</th>";
     head += "<th>Gravité</th><th>Source</th><th>Type</th>" +
             "<th>Fichier</th><th>Ligne</th><th>Date/heure</th>" +
             "<th>Ticket</th><th>Détail</th></tr></thead>";
     var body = "<tbody>" + rows.map(function (a) {
-      var btn = withValidate ?
-        '<td><button type="button" class="btn-validate" data-id="' + escapeHtml(a.id) +
-        '" title="Valider — hors calcul">✅ Valider</button></td>' : "";
-      return "<tr>" + btn +
-             "<td><span class='sev-badge sev-" + a.severity + "'>" +
-             SEV_BADGE[a.severity] + "</span></td><td>" + escapeHtml(a.source) +
-             "</td><td>" + escapeHtml(a.type) + "</td><td>" + escapeHtml(a.file || "") +
-             "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
-             "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
-             escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+      return _anomalyRowHTML(a, withValidate, napsOkBadge);
     }).join("") + "</tbody>";
     return head + body;
   }
@@ -474,16 +548,42 @@
 
   function renderAnomalies() {
     var sev = checkedValues("fsev"), src = checkedValues("fsrc");
-    var rows = activeAnomalies().filter(function (a) {
+    var all = activeAnomalies().filter(function (a) {
       return a.severity !== "info" &&
              sev.indexOf(a.severity) !== -1 && src.indexOf(a.source) !== -1;
     }).sort(function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; });
 
-    document.getElementById("anom-count").textContent = rows.length + " anomalie(s) à traiter";
+    var actionable = all.filter(isActionableAnomaly);
+    var pairingOk = all.filter(isNapsTotalsOk);
+
+    var countTxt = actionable.length + " anomalie(s) à traiter";
+    if (pairingOk.length) {
+      countTxt += " · " + pairingOk.length + " ligne(s) TPE (totaux alignés — pas d'écart)";
+    }
+    document.getElementById("anom-count").textContent = countTxt;
+
     var table = document.getElementById("anom-table");
-    table.innerHTML = rows.length ? _tableHTML(rows, true) :
-      "<tbody><tr><td colspan='9'>✅ Aucune anomalie en attente pour ces filtres.</td></tr></tbody>";
-    if (rows.length) bindValidateButtons(table);
+    if (!all.length) {
+      table.innerHTML =
+        "<tbody><tr><td colspan='9'>✅ Aucune anomalie en attente pour ces filtres.</td></tr></tbody>";
+      return;
+    }
+    var head = "<thead><tr><th>Valider</th><th>Gravité</th><th>Source</th><th>Type</th>" +
+      "<th>Fichier</th><th>Ligne</th><th>Date/heure</th><th>Ticket</th><th>Détail</th></tr></thead>";
+    var body = "<tbody>";
+    if (!actionable.length && pairingOk.length) {
+      body += "<tr><td colspan='9' class='muted' style='background:#f4fbf7'>" +
+        "✅ Aucune anomalie financière — seulement des écarts d'appariement TPE (totaux OK).</td></tr>";
+    }
+    actionable.forEach(function (a) { body += _anomalyRowHTML(a, true, false); });
+    if (pairingOk.length) {
+      body += "<tr><td colspan='9' class='muted' style='background:#f4fbf7;font-weight:600'>" +
+        "✅ Appariement TPE — totaux POS CB = NAPS (détail dans la section verte ci-dessus)</td></tr>";
+      pairingOk.forEach(function (a) { body += _anomalyRowHTML(a, true, true); });
+    }
+    body += "</tbody>";
+    table.innerHTML = head + body;
+    bindValidateButtons(table);
   }
 
   function renderValidated() {
@@ -587,9 +687,11 @@
 
     function countsForRun(runResult) {
       var sev = { haute: 0, moyenne: 0, info: 0 };
+      var napsPairing = 0;
       runResult.anomalies.forEach(function (a) {
         if (isValidated(a.id)) return;
-        sev[a.severity] = (sev[a.severity] || 0) + 1;
+        if (isNapsTotalsOk(a) && a.severity !== "info") napsPairing++;
+        else sev[a.severity] = (sev[a.severity] || 0) + 1;
       });
       var nVal = runResult.anomalies.filter(function (a) { return isValidated(a.id); }).length;
       return {
@@ -597,6 +699,7 @@
         n_infos: sev.info,
         severity: sev,
         n_validated: nVal,
+        n_naps_pairing_ok: napsPairing,
       };
     }
 
