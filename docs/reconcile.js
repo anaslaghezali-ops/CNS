@@ -19,6 +19,82 @@
   var GLOVO_PAYMENT_MAP = { Online: "Bank Transfer", Cash: "Cash" };
   var SITE_EXPECTED_PAYMENT = "Bank Transfer";
   var DINEIN_ALLOWED = ["Cash", "Credit card"];
+  var PAYS_POS = ["Cash", "Bank Transfer", "Credit card"];
+
+  /** POS « Payment type » peut lister plusieurs modes : « Cash, Cash » ou « Cash, Credit card ». */
+  function parsePaymentTypes(raw) {
+    if (!raw) return [];
+    return String(raw).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+  function isPurePaymentType(raw, expected) {
+    var types = parsePaymentTypes(raw);
+    if (!types.length) return String(raw).trim() === expected;
+    return types.every(function (t) { return t === expected; });
+  }
+  function isAllDineinPayments(raw) {
+    var types = parsePaymentTypes(raw);
+    if (!types.length) return DINEIN_ALLOWED.indexOf(String(raw).trim()) >= 0;
+    return types.every(function (t) { return DINEIN_ALLOWED.indexOf(t) >= 0; });
+  }
+  function isSplitCashCreditCard(raw) {
+    var types = parsePaymentTypes(raw);
+    if (types.length < 2) return false;
+    var hasCash = false, hasCC = false;
+    types.forEach(function (t) {
+      if (t === "Cash") hasCash = true;
+      if (t === "Credit card") hasCC = true;
+    });
+    return hasCash && hasCC && types.every(function (t) {
+      return t === "Cash" || t === "Credit card";
+    });
+  }
+  /** Ventile le total POS par mode (fractionnement Cash ou Cash+CB avec NAPS). */
+  function allocatePosPaymentAmounts(p) {
+    var t = isNaN(p.total) ? 0 : p.total;
+    var out = { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
+    if (p._naps_split_cc != null && !isNaN(p._naps_split_cc)) {
+      var cc = Math.min(t, Math.max(0, p._naps_split_cc));
+      out["Credit card"] = cc;
+      out["Cash"] = t - cc;
+      return out;
+    }
+    var types = parsePaymentTypes(p.payment_type);
+    if (!types.length) {
+      var pay = PAYS_POS.indexOf(p.payment_type) >= 0 ? p.payment_type : "Autre";
+      out[pay] = t;
+      return out;
+    }
+    if (types.every(function (tp) { return tp === "Cash"; })) {
+      out["Cash"] = t;
+      return out;
+    }
+    if (types.every(function (tp) { return tp === "Credit card"; })) {
+      out["Credit card"] = t;
+      return out;
+    }
+    if (types.length === 1 && PAYS_POS.indexOf(types[0]) >= 0) {
+      out[types[0]] = t;
+      return out;
+    }
+    if (isSplitCashCreditCard(p.payment_type)) {
+      out["Cash"] = t;
+      return out;
+    }
+    out["Cash"] = t;
+    return out;
+  }
+  function sumPosCcOnDay(pos, d) {
+    var s = 0;
+    pos.forEach(function (p) {
+      if (dateKey(p.datetime) !== d) return;
+      if (isPurePaymentType(p.payment_type, "Credit card")) {
+        s += isNaN(p.total) ? 0 : p.total;
+      } else if (p._naps_split_cc != null && !isNaN(p._naps_split_cc)) {
+        s += p._naps_split_cc;
+      }
+    });
+    return s;
+  }
 
   var WINDOW_BEFORE_MIN = 1;
   var WINDOW_AFTER_MIN = 10;
@@ -269,11 +345,12 @@
   }
   function sitePaymentWarning(p, o) {
     if (siteOrderIsTakeout(o)) {
-      if (p.payment_type === "Bank Transfer") {
+      if (parsePaymentTypes(p.payment_type).indexOf("Bank Transfer") >= 0 ||
+          p.payment_type === "Bank Transfer") {
         return " ⚠️ Commande à emporter (col H) : « Bank Transfer » interdit au POS " +
                "(Cash ou Credit card uniquement).";
       }
-      if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
+      if (!isAllDineinPayments(p.payment_type)) {
         return " ⚠️ Commande à emporter : paiement '" + p.payment_type +
                "' inattendu (Cash ou Credit card).";
       }
@@ -287,7 +364,8 @@
   }
   function pushSitePaymentAnomalies(p, o, anomalies) {
     if (siteOrderIsTakeout(o)) {
-      if (p.payment_type === "Bank Transfer") {
+      if (parsePaymentTypes(p.payment_type).indexOf("Bank Transfer") >= 0 ||
+          p.payment_type === "Bank Transfer") {
         anomalies.push(posAnomaly(p, {
           source: "Site", severity: "haute",
           type: "Mode de paiement incorrect (commande à emporter)",
@@ -297,7 +375,7 @@
           source_ref: o.identifiant,
           payment_pos: p.payment_type,
           payment_source: "Cash ou Credit card" }));
-      } else if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
+      } else if (!isAllDineinPayments(p.payment_type)) {
         anomalies.push(posAnomaly(p, {
           source: "Site", severity: "haute",
           type: "Mode de paiement incorrect (commande à emporter)",
@@ -436,33 +514,47 @@
   function reconcileNaps(pos, naps) {
     var anomalies = [];
     if (!naps.length) return anomalies;
-    // Tickets POS « Credit card » (avec date/heure, ligne, ticket).
-    var posCC = pos.filter(function (p) { return p.payment_type === "Credit card"; });
+    pos.forEach(function (p) {
+      delete p._naps_split_cc;
+      delete p._naps_split_row;
+    });
+
+    var posCC = pos.filter(function (p) { return isPurePaymentType(p.payment_type, "Credit card"); });
 
     var napsDates = naps.map(function (n) { return n.date; }).filter(Boolean).sort();
     var nMin = napsDates[0], nMax = napsDates[napsDates.length - 1];
 
     var posDates = {};
-    posCC.forEach(function (p) { var d = dateKey(p.datetime); if (d) posDates[d] = true; });
+    pos.forEach(function (p) {
+      var d = dateKey(p.datetime);
+      if (!d) return;
+      if (isPurePaymentType(p.payment_type, "Credit card") || isSplitCashCreditCard(p.payment_type)) {
+        posDates[d] = true;
+      }
+    });
 
     Object.keys(posDates).sort().forEach(function (d) {
       var posDay = posCC.filter(function (p) { return dateKey(p.datetime) === d; });
+      var splitDay = pos.filter(function (p) {
+        return dateKey(p.datetime) === d && isSplitCashCreditCard(p.payment_type);
+      });
 
-      // Journée non couverte par le relevé NAPS -> info (décalage télécollecte).
       if (!(d >= nMin && d <= nMax)) {
         var total = posDay.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0);
-        anomalies.push(anomaly({ source: "NAPS", severity: "info",
-          type: "Journée non couverte par le relevé NAPS",
-          detail: posDay.length + " paiement(s) 'Credit card' du " + d + " (" +
-                  total.toFixed(0) + " DH) : le relevé NAPS fourni couvre du " + nMin +
-                  " au " + nMax + " (décalage de télécollecte probable).",
-          source_ref: d }));
+        if (total > 0) {
+          anomalies.push(anomaly({ source: "NAPS", severity: "info",
+            type: "Journée non couverte par le relevé NAPS",
+            detail: posDay.length + " paiement(s) 'Credit card' du " + d + " (" +
+                    total.toFixed(0) + " DH) : le relevé NAPS fourni couvre du " + nMin +
+                    " au " + nMax + " (décalage de télécollecte probable).",
+            source_ref: d }));
+        }
         return;
       }
 
-      // Rapprochement transaction par transaction, par montant, sur la journée.
       var napsDay = naps.filter(function (n) { return n.date === d; });
       var napsUsed = new Set();
+
       posDay.forEach(function (p) {
         var amt = Math.round((isNaN(p.total) ? 0 : p.total) * 100) / 100;
         var found = -1;
@@ -470,7 +562,7 @@
           if (napsUsed.has(i)) continue;
           if (Math.round(napsDay[i].montant * 100) / 100 === amt) { found = i; break; }
         }
-        if (found >= 0) { napsUsed.add(found); return; }  // apparié -> OK
+        if (found >= 0) { napsUsed.add(found); return; }
         anomalies.push(posAnomaly(p, { source: "NAPS", severity: "haute",
           type: "Paiement POS absent du TPE",
           detail: "Paiement 'Credit card' de " + amt.toFixed(0) + " DH au POS le " + d +
@@ -479,7 +571,28 @@
           source_ref: p.ticket_no,
           amount_pos: amt }));
       });
-      // Transactions NAPS non appariées.
+
+      // Cash + CB sur place/emporter : la ligne NAPS non appariée = part carte du ticket.
+      splitDay.sort(function (a, b) {
+        return (isNaN(b.total) ? 0 : b.total) - (isNaN(a.total) ? 0 : a.total);
+      });
+      splitDay.forEach(function (p) {
+        var ticketTotal = Math.round((isNaN(p.total) ? 0 : p.total) * 100) / 100;
+        if (ticketTotal <= 0) return;
+        var found = -1, bestAmt = 0;
+        for (var j = 0; j < napsDay.length; j++) {
+          if (napsUsed.has(j)) continue;
+          var nAmt = Math.round(napsDay[j].montant * 100) / 100;
+          if (nAmt <= 0 || nAmt >= ticketTotal) continue;
+          if (found < 0 || nAmt > bestAmt) { found = j; bestAmt = nAmt; }
+        }
+        if (found >= 0) {
+          napsUsed.add(found);
+          p._naps_split_cc = bestAmt;
+          p._naps_split_row = napsDay[found].row;
+        }
+      });
+
       napsDay.forEach(function (n, i) {
         if (napsUsed.has(i)) return;
         anomalies.push(anomaly({ source: "NAPS", severity: "haute",
@@ -526,10 +639,16 @@
       if (!dayPairing.length) return;
 
       var posCC = pos.filter(function (p) {
-        return p.payment_type === "Credit card" && dateKey(p.datetime) === d;
+        return dateKey(p.datetime) === d && (
+          isPurePaymentType(p.payment_type, "Credit card") ||
+          (p._naps_split_cc != null && !isNaN(p._naps_split_cc)));
       });
       var posTotal = posCC.reduce(function (s, p) {
-        return s + (isNaN(p.total) ? 0 : p.total); }, 0);
+        if (isPurePaymentType(p.payment_type, "Credit card")) {
+          return s + (isNaN(p.total) ? 0 : p.total);
+        }
+        return s + p._naps_split_cc;
+      }, 0);
       var napsDay = naps.filter(function (n) { return n.date === d; });
       var napsTotal = napsDay.reduce(function (s, n) {
         return s + (isNaN(n.montant) ? 0 : n.montant); }, 0);
@@ -921,7 +1040,7 @@
   function reconcileDinein(pos) {
     var anomalies = [];
     pos.filter(function (p) { return p.channel === CH_DINEIN; }).forEach(function (p) {
-      if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
+      if (!isAllDineinPayments(p.payment_type)) {
         anomalies.push(posAnomaly(p, { source: "Sur place", severity: "moyenne",
           type: "Mode de paiement inattendu (sur place/emporter)",
           detail: "Ticket " + p.ticket_name + " sur place/emporter payé '" +
@@ -1480,11 +1599,14 @@
     var byPayment = { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
     var matrix = {};  // canal -> { paiement -> somme }
     pos.forEach(function (p) {
-      var t = isNaN(p.total) ? 0 : p.total;
-      var pay = PAYS.indexOf(p.payment_type) >= 0 ? p.payment_type : "Autre";
-      byPayment[pay] += t;
-      matrix[p.channel] = matrix[p.channel] || { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
-      matrix[p.channel][pay] += t;
+      var alloc = allocatePosPaymentAmounts(p);
+      Object.keys(alloc).forEach(function (pay) {
+        var v = alloc[pay];
+        if (!v) return;
+        byPayment[pay] = (byPayment[pay] || 0) + v;
+        matrix[p.channel] = matrix[p.channel] || { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
+        matrix[p.channel][pay] += v;
+      });
     });
 
     function sumPos(channel) {
@@ -1493,7 +1615,9 @@
     }
     function sumPosGlovoPay(pay) {
       return pos.reduce(function (a, p) {
-        return a + (p.channel === CH_GLOVO && p.payment_type === pay && !isNaN(p.total) ? p.total : 0);
+        if (p.channel !== CH_GLOVO) return a;
+        var alloc = allocatePosPaymentAmounts(p);
+        return a + (alloc[pay] || 0);
       }, 0);
     }
     function sumGlovoAmount(pay) {
@@ -1564,7 +1688,8 @@
     var payment_breakdown = buildPaymentBreakdown(byPayment, matrix);
 
     var posSiteCash = pos.reduce(function (a, p) {
-      return a + (p.channel === CH_SITE && p.payment_type === "Cash" && !isNaN(p.total) ? p.total : 0);
+      if (p.channel !== CH_SITE) return a;
+      return a + (allocatePosPaymentAmounts(p)["Cash"] || 0);
     }, 0);
     var siteCashSrc = 0;
     if (site) {
