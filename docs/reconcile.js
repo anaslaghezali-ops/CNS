@@ -198,6 +198,24 @@
   // ----------------------------------------------------------------------- //
   // Fenêtre pour détecter une faute de frappe sur le numéro de commande site.
   var SITE_TYPO_WINDOW_MIN = 20;
+  var SITE_TYPO_MAX_EDITS = 2;   // 1 chiffre en trop/en moins/modifié (voire 2)
+
+  // Distance de Levenshtein (nb d'insertions/suppressions/substitutions).
+  function editDistance(a, b) {
+    a = String(a); b = String(b);
+    var m = a.length, n = b.length;
+    var prev = [], cur = [], i, j;
+    for (j = 0; j <= n; j++) prev[j] = j;
+    for (i = 1; i <= m; i++) {
+      cur[0] = i;
+      for (j = 1; j <= n; j++) {
+        var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      }
+      for (j = 0; j <= n; j++) prev[j] = cur[j];
+    }
+    return prev[n];
+  }
 
   // Rapproche le site par NUMÉRO (exact) et par faute de frappe (orphelin
   // 5 chiffres). Les tickets SANS numéro sont laissés à la passe commune.
@@ -210,7 +228,13 @@
     var orphans = pos.filter(function (p) {
       return p.channel === CH_SITE && !siteIds.has(p.ticket_name);
     });
-    var usedOrphan = new Set();
+    // Pool des fautes de frappe : tout ticket numérique de 4 à 6 chiffres absent
+    // du fichier site (couvre un chiffre en trop/en moins → « 5776 » pour 57767,
+    // ou « 58158 » pour 58159). Exclut les tickets Glovo (1-3 chiffres).
+    var typoPool = pos.filter(function (p) {
+      return /^\d{4,6}$/.test(p.ticket_name) && !siteIds.has(p.ticket_name);
+    });
+    var typoUsed = new Set();  // ticket_no consommés par une faute de frappe
 
     var unmatchedDelivered = [];
     site.forEach(function (o) {
@@ -239,42 +263,51 @@
       // Une commande non livrée (refusée/annulée) PEUT être présente au POS.
     });
 
-    // Faute de frappe : orphelin « site-like » (5 chiffres) de même montant/heure.
-    unmatchedDelivered.forEach(function (o) {
-      var sid = o.identifiant, best = -1, bestGap = Infinity;
-      orphans.forEach(function (p, i) {
-        if (usedOrphan.has(i)) return;
+    // Faute de frappe sur le numéro : appariement GLOBAL des commandes livrées
+    // introuvables avec les tickets du pool (n° proche + même montant + heure).
+    var typoPairs = [];
+    unmatchedDelivered.forEach(function (o, oi) {
+      if (!o.created_at) return;
+      typoPool.forEach(function (p, pi) {
         if (isNaN(p.total) || Math.abs(p.total - o.order_total) > AMOUNT_TOL) return;
-        if (!p.datetime || !o.created_at) return;
+        if (!p.datetime) return;
         var gap = Math.abs(minutesBetween(p.datetime, o.created_at));
         if (gap > SITE_TYPO_WINDOW_MIN) return;
-        if (gap < bestGap) { bestGap = gap; best = i; }
+        var ed = editDistance(p.ticket_name, o.identifiant);
+        if (ed > SITE_TYPO_MAX_EDITS) return;
+        typoPairs.push({ oi: oi, pi: pi, cost: ed * 1000 + gap, ed: ed, gap: gap });
       });
-      if (best >= 0) {
-        usedOrphan.add(best);
-        var m = orphans[best];
-        m.channel = CH_SITE;
-        var payNote = m.payment_type !== SITE_EXPECTED_PAYMENT ?
-          " ⚠️ De plus, son paiement est '" + m.payment_type + "' au lieu de '" +
-          SITE_EXPECTED_PAYMENT + "'." : "";
-        anomalies.push(anomaly({ source: "Site", severity: "moyenne",
-          type: "Numéro de commande mal saisi (faute de frappe)",
-          detail: "Commande site " + sid + " livrée : introuvable sous ce numéro, mais le " +
-                  "ticket POS " + m.ticket_name + " correspond (même montant " +
-                  o.order_total.toFixed(0) + " DH, +" + bestGap.toFixed(0) + " min, et " +
-                  m.ticket_name + " n'existe pas dans le fichier site). Le caissier a " +
-                  "probablement tapé " + m.ticket_name + " au lieu de " + sid + "." + payNote,
-          ticket_name: m.ticket_name, pos_datetime: m.datetime, source_ref: sid,
-          amount_pos: m.total, amount_source: o.order_total,
-          payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
-      } else {
-        missing.push(o);  // -> passe commune (ticket sans numéro) puis « absente »
-      }
+    });
+    typoPairs.sort(function (a, b) { return a.cost - b.cost; });
+    var matchedO = new Set(), usedPi = new Set();
+    typoPairs.forEach(function (pr) {
+      if (matchedO.has(pr.oi) || usedPi.has(pr.pi)) return;
+      matchedO.add(pr.oi); usedPi.add(pr.pi);
+      var o = unmatchedDelivered[pr.oi], m = typoPool[pr.pi];
+      m.channel = CH_SITE;
+      typoUsed.add(m.ticket_no);
+      var payNote = m.payment_type !== SITE_EXPECTED_PAYMENT ?
+        " ⚠️ De plus, son paiement est '" + m.payment_type + "' au lieu de '" +
+        SITE_EXPECTED_PAYMENT + "'." : "";
+      anomalies.push(anomaly({ source: "Site", severity: "moyenne",
+        type: "Numéro de commande mal saisi (faute de frappe)",
+        detail: "Commande site " + o.identifiant + " livrée : introuvable sous ce numéro, " +
+                "mais le ticket POS " + m.ticket_name + " correspond (même montant " +
+                o.order_total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min, numéro " +
+                "quasi identique). Le caissier a probablement tapé " + m.ticket_name +
+                " au lieu de " + o.identifiant + "." + payNote,
+        ticket_name: m.ticket_name, pos_datetime: m.datetime, source_ref: o.identifiant,
+        amount_pos: m.total, amount_source: o.order_total,
+        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
     });
 
-    // Orphelins « site-like » non expliqués.
-    orphans.forEach(function (p, i) {
-      if (usedOrphan.has(i)) return;
+    unmatchedDelivered.forEach(function (o, oi) {
+      if (!matchedO.has(oi)) missing.push(o);  // -> passe commune puis « absente »
+    });
+
+    // Orphelins « site-like » (5 chiffres) non expliqués.
+    orphans.forEach(function (p) {
+      if (typoUsed.has(p.ticket_no)) return;
       anomalies.push(anomaly({ source: "Site", severity: "moyenne",
         type: "Ticket Site au POS sans commande correspondante",
         detail: "Ticket POS " + p.ticket_name + " ressemble à une commande site " +
