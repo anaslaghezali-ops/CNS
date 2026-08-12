@@ -40,7 +40,8 @@ GLOVO_WINDOW_AFTER_MIN = 10    # maximum observé entre réception et saisie POS
 AMOUNT_TOLERANCE = 0.5  # écart de montant toléré (arrondis)
 
 
-def _anomaly(source, severity, type_, detail, *, ticket_name="", pos_datetime=None,
+def _anomaly(source, severity, type_, detail, *, ticket_name="", pos_ticket_no="",
+             pos_datetime=None,
              source_ref="", amount_pos=None, amount_source=None,
              payment_pos="", payment_source=""):
     return {
@@ -48,6 +49,7 @@ def _anomaly(source, severity, type_, detail, *, ticket_name="", pos_datetime=No
         "severity": severity,
         "type": type_,
         "ticket_name": ticket_name,
+        "pos_ticket_no": pos_ticket_no,
         "pos_datetime": pos_datetime,
         "source_ref": source_ref,
         "detail": detail,
@@ -55,6 +57,15 @@ def _anomaly(source, severity, type_, detail, *, ticket_name="", pos_datetime=No
         "amount_source": amount_source,
         "payment_pos": payment_pos,
         "payment_source": payment_source,
+    }
+
+
+def _pos_ticket_kw(p):
+    """Lie une anomalie à UNE ligne POS (ticket_no unique, pas seulement ticket_name)."""
+    return {
+        "ticket_name": p["ticket_name"],
+        "pos_ticket_no": str(p["ticket_no"]),
+        "pos_datetime": p.get("datetime"),
     }
 
 
@@ -92,17 +103,17 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                     "Site", "haute", "Écart de montant",
                     f"Commande site {sid} : {s['order_total']} DH (site) "
                     f"vs {pos_row['total']} DH (POS).",
-                    ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                    source_ref=sid, amount_pos=pos_row["total"], amount_source=s["order_total"],
+                    **{_pos_ticket_kw(pos_row), "source_ref": sid,
+                       "amount_pos": pos_row["total"], "amount_source": s["order_total"]},
                 ))
             if pos_row["payment_type"] != SITE_EXPECTED_PAYMENT:
                 anomalies.append(_anomaly(
                     "Site", "haute", "Mode de paiement incorrect",
                     f"Commande site {sid} : attendu '{SITE_EXPECTED_PAYMENT}', "
                     f"trouvé '{pos_row['payment_type']}' au POS.",
-                    ticket_name=sid, pos_datetime=pos_row.get("datetime"),
-                    source_ref=sid, payment_pos=pos_row["payment_type"],
-                    payment_source=SITE_EXPECTED_PAYMENT,
+                    **{_pos_ticket_kw(pos_row), "source_ref": sid,
+                       "payment_pos": pos_row["payment_type"],
+                       "payment_source": SITE_EXPECTED_PAYMENT},
                 ))
         # Une commande non livrée (refusée/annulée) PEUT être présente au POS.
 
@@ -136,9 +147,10 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
                 f"{s['order_total']:.0f} DH, +{best_gap:.0f} min, et {best_row['ticket_name']} "
                 f"n'existe pas dans le fichier site). Le caissier a probablement tapé "
                 f"{best_row['ticket_name']} au lieu de {sid}." + pay_note,
-                ticket_name=best_row["ticket_name"], pos_datetime=best_row.get("datetime"),
-                source_ref=sid, amount_pos=best_row["total"], amount_source=s["order_total"],
-                payment_pos=best_row["payment_type"], payment_source=SITE_EXPECTED_PAYMENT,
+                **{_pos_ticket_kw(best_row), "source_ref": sid,
+                   "amount_pos": best_row["total"], "amount_source": s["order_total"],
+                   "payment_pos": best_row["payment_type"],
+                   "payment_source": SITE_EXPECTED_PAYMENT},
             ))
         else:
             missing.append(s)  # -> passe commune, puis « absente »
@@ -151,8 +163,7 @@ def reconcile_site(pos_df: pd.DataFrame, site_df: pd.DataFrame):
             "Site", "moyenne", "Ticket Site au POS sans commande correspondante",
             f"Ticket POS {p['ticket_name']} ressemble à une commande site "
             f"mais n'existe pas dans le fichier site.",
-            ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-            amount_pos=p["total"], payment_pos=p["payment_type"],
+            **{_pos_ticket_kw(p), "amount_pos": p["total"], "payment_pos": p["payment_type"]},
         ))
     return anomalies, missing
 
@@ -319,9 +330,8 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                 f"Commande Glovo {g['order_id']} ({g['payment_type']}, {g['amount']:.0f} DH) : "
                 f"attendu '{exp}' au POS, trouvé '{p['payment_type']}' "
                 f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}).",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                source_ref=str(g["order_id"]),
-                payment_pos=p["payment_type"], payment_source=exp,
+                **{_pos_ticket_kw(p), "source_ref": str(g["order_id"]),
+                   "payment_pos": p["payment_type"], "payment_source": exp},
             ))
         else:
             remaining3.append(gidx)
@@ -340,9 +350,8 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                 f"Commande Glovo {g['order_id']} ({g['amount']:.0f} DH) reçue à "
                 f"{g['received_at']:%H:%M}, tapée au POS à {p['datetime']:%H:%M} "
                 f"(ticket {p['ticket_name']}, {delay:+.0f} min) — présente mais tardive.",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                source_ref=str(g["order_id"]),
-                amount_pos=p["total"], amount_source=g["amount"],
+                **{_pos_ticket_kw(p), "source_ref": str(g["order_id"]),
+                   "amount_pos": p["total"], "amount_source": g["amount"]},
             ))
         else:
             missing.append(g)  # -> passe commune (ticket sans numéro) puis « absente »
@@ -375,11 +384,10 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                 f"{g['amount']:.0f} DH) reçue à {g['received_at']:%H:%M}, tapée au POS "
                 f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}, {delay:+.0f} min) — "
                 f"commande annulée sur Glovo mais ticket caisse présent.",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                source_ref=str(g["order_id"]),
-                amount_pos=p["total"], amount_source=g["amount"],
-                payment_pos=p["payment_type"],
-                payment_source=GLOVO_PAYMENT_MAP.get(g["payment_type"]),
+                **{_pos_ticket_kw(p), "source_ref": str(g["order_id"]),
+                   "amount_pos": p["total"], "amount_source": g["amount"],
+                   "payment_pos": p["payment_type"],
+                   "payment_source": GLOVO_PAYMENT_MAP.get(g["payment_type"])},
             ))
 
     # Tickets classés Glovo non appariés.
@@ -390,8 +398,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                 f"Ticket POS {p['ticket_name']} ({p['datetime']:%H:%M}, "
                 f"{p['payment_type']}, {p['total']:.0f} DH) classé Glovo mais sans "
                 f"commande Glovo de même montant dans la fenêtre temporelle.",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                amount_pos=p["total"], payment_pos=p["payment_type"],
+                **{_pos_ticket_kw(p), "amount_pos": p["total"], "payment_pos": p["payment_type"]},
             ))
     return anomalies, missing
 
@@ -451,10 +458,9 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
                 f"Commande {d['src']} {d['id']} ({extra}{d['amount']:.0f} DH) retrouvée au "
                 f"POS sous le ticket sans numéro {best_row['ticket_no']} (+{best_gap:.0f} min). "
                 f"Présente — simple oubli de numéro.",
-                ticket_name=best_row["ticket_name"] or "(vide)",
-                pos_datetime=best_row.get("datetime"), source_ref=d["id"],
-                amount_pos=best_row["total"], amount_source=d["amount"],
-                payment_pos=best_row["payment_type"],
+                **{_pos_ticket_kw(best_row), "ticket_name": best_row["ticket_name"] or "(vide)",
+                   "source_ref": d["id"], "amount_pos": best_row["total"],
+                   "amount_source": d["amount"], "payment_pos": best_row["payment_type"]},
             ))
         elif d["src"] == "Site":
             anomalies.append(_anomaly(
@@ -482,8 +488,8 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
             f"Ticket {p['ticket_no']} du {p['datetime']:%Y-%m-%d} à {p['datetime']:%H:%M} "
             f"({p['payment_type']}, {p['total']} DH) sans numéro — non rattaché à "
             f"une commande Glovo ni Site.",
-            ticket_name=p["ticket_name"] or "(vide)", pos_datetime=p.get("datetime"),
-            amount_pos=p["total"], payment_pos=p["payment_type"],
+            **{_pos_ticket_kw(p), "ticket_name": p["ticket_name"] or "(vide)",
+               "amount_pos": p["total"], "payment_pos": p["payment_type"]},
         ))
     return anomalies
 
@@ -526,8 +532,7 @@ def reconcile_dinein(pos_df: pd.DataFrame):
                 "Sur place", "moyenne", "Mode de paiement inattendu (sur place/emporter)",
                 f"Ticket {p['ticket_name']} sur place/emporter payé "
                 f"'{p['payment_type']}' (attendu Cash ou Credit card).",
-                ticket_name=p["ticket_name"], pos_datetime=p.get("datetime"),
-                amount_pos=p["total"], payment_pos=p["payment_type"],
+                **{_pos_ticket_kw(p), "amount_pos": p["total"], "payment_pos": p["payment_type"]},
             ))
     return anomalies
 
@@ -586,18 +591,19 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
 
 
 def _annotate_pos(pos_df, anomalies):
-    """Ajoute au POS le statut de réconciliation et le détail."""
+    """Ajoute au POS le statut de réconciliation et le détail (par ticket_no, pas ticket_name)."""
     df = pos_df.copy()
-    by_ticket: dict[str, list[str]] = {}
-    sev_ticket: dict[str, set] = {}
+    by_ticket_no: dict[str, list[str]] = {}
+    sev_ticket_no: dict[str, set] = {}
     for a in anomalies:
-        tn = a.get("ticket_name")
-        if tn and tn not in ("", "(vide)"):
-            by_ticket.setdefault(str(tn), []).append(f"[{a['type']}] {a['detail']}")
-            sev_ticket.setdefault(str(tn), set()).add(a["severity"])
+        no = a.get("pos_ticket_no") or ""
+        if not no:
+            continue
+        by_ticket_no.setdefault(str(no), []).append(f"[{a['type']}] {a['detail']}")
+        sev_ticket_no.setdefault(str(no), set()).add(a["severity"])
 
     def status(row):
-        s = sev_ticket.get(str(row["ticket_name"]), set())
+        s = sev_ticket_no.get(str(row["ticket_no"]), set())
         if "haute" in s or "moyenne" in s:
             return "⚠️ Anomalie"
         if "info" in s:
@@ -605,7 +611,7 @@ def _annotate_pos(pos_df, anomalies):
         return "✅ OK"
 
     def detail(row):
-        return " | ".join(by_ticket.get(str(row["ticket_name"]), []))
+        return " | ".join(by_ticket_no.get(str(row["ticket_no"]), []))
 
     df["statut_reconciliation"] = df.apply(status, axis=1)
     df["anomalies"] = df.apply(detail, axis=1)

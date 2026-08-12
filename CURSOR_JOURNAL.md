@@ -218,6 +218,35 @@ réintroduire l'ancienne logique sans vérifier :
 
 ---
 
+### 2026-08-12 — Distinction tickets POS même `ticket_name` (ex. deux « 725 »)
+
+**Demandé par** : gérant (session Cursor).
+
+**Problème** : deux lignes POS avec le même numéro saisi (`ticket_name` = 725) partageaient
+les anomalies dans la table POS et les exports — impossible de voir que le 725 à 16:11
+(120 DH, sans Glovo) est en anomalie alors que le 725 à 16:18 (108 DH) est OK.
+
+**Règle appliquée** :
+
+- Chaque anomalie liée au POS porte `pos_ticket_no` = colonne **Ticket No.** (identifiant
+  unique de la ligne caisse), en plus de `ticket_name`.
+- L’annotation POS (`statut`, colonne anomalies) groupe par **`ticket_no`**, pas par
+  `ticket_name`.
+- L’UI affiche `725 · #12345 · 16:11` pour distinguer visuellement.
+
+**Fichiers modifiés** :
+
+| Fichier | Changement |
+|---------|------------|
+| `docs/reconcile.js` | `posFields`, `posAnomaly`, `annotate` par ticket_no |
+| `docs/app.js` | `fmtTicketLabel`, `anomalyMatchesPos`, export N° POS |
+| `reconciliation/reconcile.py` | `_pos_ticket_kw`, `_annotate_pos` par ticket_no |
+
+**Impact** : les deux tickets 725 du 07/08 ont chacun leur statut et leurs anomalies
+isolées.
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :

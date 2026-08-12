@@ -99,6 +99,23 @@
     return state.anomalies.filter(function (a) { return isValidated(a.id); });
   }
 
+  function fmtTicketLabel(a) {
+    var parts = [];
+    if (a.ticket_name && a.ticket_name !== "(vide)") parts.push(a.ticket_name);
+    if (a.pos_ticket_no) parts.push("#" + a.pos_ticket_no);
+    if (a.when) {
+      var m = String(a.when).match(/\d{2}:\d{2}/);
+      if (m) parts.push(m[0]);
+    }
+    if (!parts.length) return a.ticket_name || "";
+    return parts.join(" · ");
+  }
+
+  function anomalyMatchesPos(a, p) {
+    if (a.pos_ticket_no && p.ticket_no) return a.pos_ticket_no === p.ticket_no;
+    return false;
+  }
+
   function validateAnomaly(id) {
     if (!state) return;
     state.validated[id] = true;
@@ -116,10 +133,7 @@
   function refreshPosStatuts() {
     var active = activeAnomalies();
     state.pos.forEach(function (p) {
-      var tn = p.ticket_name;
-      var related = active.filter(function (a) {
-        return tn && tn !== "(vide)" && a.ticket_name === tn;
-      });
+      var related = active.filter(function (a) { return anomalyMatchesPos(a, p); });
       var sev = {};
       related.forEach(function (a) { sev[a.severity] = true; });
       p.statut = (sev.haute || sev.moyenne) ? "⚠️ Anomalie" :
@@ -333,7 +347,7 @@
                 SEV_BADGE[a.severity] + "</span></td>" +
                 "<td>" + escapeHtml(a.type) + "</td>" +
                 "<td class='st-anom'><b>" + impSign + fmtDH(impact) + "</b></td>" +
-                "<td>" + escapeHtml(a.ticket_name) + "</td>" +
+                "<td>" + escapeHtml(fmtTicketLabel(a)) + "</td>" +
                 "<td>" + escapeHtml(a.detail) + "</td></tr>";
       });
       html += "</tbody></table></div>";
@@ -359,7 +373,7 @@
              "</td><td>" + escapeHtml(a.type) + "</td><td>" + escapeHtml(a.file || "") +
              "</td><td>" + escapeHtml(a.row === "" || a.row == null ? "" : a.row) +
              "</td><td>" + escapeHtml(a.when || "") + "</td><td>" +
-             escapeHtml(a.ticket_name) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+             escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
     return head + body;
   }
@@ -404,7 +418,7 @@
              "data-id='" + escapeHtml(a.id) + "' title='Annuler la validation'>↩ Annuler</button></td>" +
              "<td><span class='sev-badge sev-" + a.severity + "'>" + SEV_BADGE[a.severity] +
              "</span></td><td>" + escapeHtml(a.source) + "</td><td>" + escapeHtml(a.type) +
-             "</td><td>" + escapeHtml(a.ticket_name) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
+             "</td><td>" + escapeHtml(fmtTicketLabel(a)) + "</td><td>" + escapeHtml(a.detail) + "</td></tr>";
     }).join("") + "</tbody>";
     var table = document.getElementById("validated-table");
     table.innerHTML = head + body;
@@ -510,7 +524,8 @@
         "Gravité": SEV_BADGE[a.severity], "Source": a.source, "Type": a.type,
         "Fichier": a.file || "", "Ligne": a.row === "" ? "" : a.row,
         "Date/heure": a.when || "",
-        "Ticket POS": a.ticket_name, "Réf. source": a.source_ref,
+        "Ticket POS": a.ticket_name, "N° POS": a.pos_ticket_no || "",
+        "Réf. source": a.source_ref,
         "Montant POS": a.amount_pos, "Montant source": a.amount_source,
         "Paiement POS": a.payment_pos, "Paiement attendu": a.payment_source,
         "Détail": a.detail,

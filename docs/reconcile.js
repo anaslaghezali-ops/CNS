@@ -71,7 +71,8 @@
   }
   function anomalyId(a) {
     return [
-      a.source, a.type, a.ticket_name || "", a.source_ref || "",
+      a.source, a.type, a.ticket_name || "", a.pos_ticket_no || "",
+      a.source_ref || "",
       a.amount_pos == null ? "" : a.amount_pos,
       a.amount_source == null ? "" : a.amount_source,
       a.payment_pos || "", a.payment_source || "",
@@ -81,7 +82,8 @@
   function anomaly(o) {
     var a = {
       source: o.source, severity: o.severity, type: o.type,
-      ticket_name: o.ticket_name || "", pos_datetime: o.pos_datetime || null,
+      ticket_name: o.ticket_name || "", pos_ticket_no: o.pos_ticket_no || "",
+      pos_datetime: o.pos_datetime || null,
       source_ref: o.source_ref || "", detail: o.detail,
       amount_pos: o.amount_pos == null ? null : o.amount_pos,
       amount_source: o.amount_source == null ? null : o.amount_source,
@@ -91,6 +93,23 @@
     };
     a.id = anomalyId(a);
     return a;
+  }
+  /** Champs POS pour lier une anomalie à UNE ligne caisse (ticket_no unique). */
+  function posFields(p) {
+    return {
+      ticket_name: p.ticket_name,
+      pos_ticket_no: p.ticket_no || "",
+      pos_datetime: p.datetime,
+      file: p.file || "POS",
+      row: p.row,
+      when: dtFull(p.datetime),
+    };
+  }
+  /** Anomalie liée à une ligne POS précise (ne se mélange pas avec un autre ticket_name identique). */
+  function posAnomaly(p, o) {
+    var base = posFields(p);
+    for (var k in o) if (o.hasOwnProperty(k)) base[k] = o[k];
+    return anomaly(base);
   }
 
   // ----------------------------------------------------------------------- //
@@ -275,22 +294,20 @@
       if (delivered) {
         if (!p) { unmatchedDelivered.push(o); return; }
         if (!isNaN(p.total) && Math.abs(p.total - o.order_total) > AMOUNT_TOL) {
-          anomalies.push(anomaly({ source: "Site", severity: "haute",
+          anomalies.push(posAnomaly(p, { source: "Site", severity: "haute",
             type: "Écart de montant",
             detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
                     p.total + " DH (POS).",
-            ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-            amount_pos: p.total, amount_source: o.order_total,
-            file: "POS", row: p.row, when: dtFull(p.datetime) }));
+            source_ref: sid,
+            amount_pos: p.total, amount_source: o.order_total }));
         }
         if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
-          anomalies.push(anomaly({ source: "Site", severity: "haute",
+          anomalies.push(posAnomaly(p, { source: "Site", severity: "haute",
             type: "Mode de paiement incorrect",
             detail: "Commande site " + sid + " : attendu '" + SITE_EXPECTED_PAYMENT +
                     "', trouvé '" + p.payment_type + "' au POS.",
-            ticket_name: sid, pos_datetime: p.datetime, source_ref: sid,
-            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT,
-            file: "POS", row: p.row, when: dtFull(p.datetime) }));
+            source_ref: sid,
+            payment_pos: p.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
         }
       }
       // Une commande non livrée (refusée/annulée) PEUT être présente au POS.
@@ -322,17 +339,16 @@
       var payNote = m.payment_type !== SITE_EXPECTED_PAYMENT ?
         " ⚠️ De plus, son paiement est '" + m.payment_type + "' au lieu de '" +
         SITE_EXPECTED_PAYMENT + "'." : "";
-      anomalies.push(anomaly({ source: "Site", severity: "moyenne",
+      anomalies.push(posAnomaly(m, { source: "Site", severity: "moyenne",
         type: "Numéro de commande mal saisi (faute de frappe)",
         detail: "Commande site " + o.identifiant + " livrée : introuvable sous ce numéro, " +
                 "mais le ticket POS " + m.ticket_name + " correspond (même montant " +
                 o.order_total.toFixed(0) + " DH, +" + pr.gap.toFixed(0) + " min, numéro " +
                 "quasi identique). Le caissier a probablement tapé " + m.ticket_name +
                 " au lieu de " + o.identifiant + "." + payNote,
-        ticket_name: m.ticket_name, pos_datetime: m.datetime, source_ref: o.identifiant,
+        source_ref: o.identifiant,
         amount_pos: m.total, amount_source: o.order_total,
-        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT,
-        file: "POS", row: m.row, when: dtFull(m.datetime) }));
+        payment_pos: m.payment_type, payment_source: SITE_EXPECTED_PAYMENT }));
     });
 
     unmatchedDelivered.forEach(function (o, oi) {
@@ -342,13 +358,11 @@
     // Orphelins « site-like » (5 chiffres) non expliqués.
     orphans.forEach(function (p) {
       if (typoUsed.has(p.ticket_no)) return;
-      anomalies.push(anomaly({ source: "Site", severity: "moyenne",
+      anomalies.push(posAnomaly(p, { source: "Site", severity: "moyenne",
         type: "Ticket Site au POS sans commande correspondante",
         detail: "Ticket POS " + p.ticket_name + " ressemble à une commande site " +
                 "mais n'existe pas dans le fichier site.",
-        ticket_name: p.ticket_name, pos_datetime: p.datetime,
-        amount_pos: p.total, payment_pos: p.payment_type,
-        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+        amount_pos: p.total, payment_pos: p.payment_type }));
     });
     return { anomalies: anomalies, missing: missing };
   }
@@ -394,13 +408,13 @@
           if (Math.round(napsDay[i].montant * 100) / 100 === amt) { found = i; break; }
         }
         if (found >= 0) { napsUsed.add(found); return; }  // apparié -> OK
-        anomalies.push(anomaly({ source: "NAPS", severity: "haute",
+        anomalies.push(posAnomaly(p, { source: "NAPS", severity: "haute",
           type: "Paiement POS absent du TPE",
           detail: "Paiement 'Credit card' de " + amt.toFixed(0) + " DH au POS le " + d +
                   " à " + hhmm(p.datetime) + " (ticket " + p.ticket_name + ") sans équivalent " +
                   "dans le relevé NAPS.",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: p.ticket_no,
-          amount_pos: amt, file: "POS", row: p.row, when: dtFull(p.datetime) }));
+          source_ref: p.ticket_no,
+          amount_pos: amt }));
       });
       // Transactions NAPS non appariées.
       napsDay.forEach(function (n, i) {
@@ -507,30 +521,28 @@
     // Phase 2 : fenêtre proche, MAUVAIS paiement (montant identique privilégié).
     assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, false, true).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi], exp = GLOVO_PAYMENT_MAP[g.payment_type];
-      anomalies.push(anomaly({ source: "Glovo", severity: "haute",
+      anomalies.push(posAnomaly(p, { source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
         detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
                 g.amount.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
                 p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
                 " à " + hhmm(p.datetime) + ").",
-        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-        payment_pos: p.payment_type, payment_source: exp,
-        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+        source_ref: g.order_id,
+        payment_pos: p.payment_type, payment_source: exp }));
     });
 
     // Phase 3 : saisie tardive (±120 min, bon paiement, montant identique).
     assignGlobalList(delivered, matched, isExp, 120, 120, true, false).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi];
       var delay = minutesBetween(p.datetime, g.received_at);
-      anomalies.push(anomaly({ source: "Glovo", severity: "info",
+      anomalies.push(posAnomaly(p, { source: "Glovo", severity: "info",
         type: "Saisie tardive (hors fenêtre 10 min)",
         detail: "Commande Glovo " + g.order_id + " (" + g.amount.toFixed(0) +
                 " DH) reçue à " + hhmm(g.received_at) + ", tapée au POS à " +
                 hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +
                 (delay >= 0 ? "+" : "") + delay.toFixed(0) + " min) — présente mais tardive.",
-        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-        amount_pos: p.total, amount_source: g.amount,
-        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+        source_ref: g.order_id,
+        amount_pos: p.total, amount_source: g.amount }));
     });
 
     // Phase 4 : commandes ANNULÉES tapées au POS (avant annulation) — pas des orphelins.
@@ -546,18 +558,17 @@
       var g = cancelled[pr.gi], p = pool[pr.pi];
       g.matched_pos = true;
       var delay = minutesBetween(p.datetime, g.received_at);
-      anomalies.push(anomaly({ source: "Glovo", severity: "info",
+      anomalies.push(posAnomaly(p, { source: "Glovo", severity: "info",
         type: "Commande Glovo annulée — présente au POS",
         detail: "Commande Glovo " + g.order_id + " annulée (" + g.payment_type + ", " +
                 g.amount.toFixed(0) + " DH) reçue à " + hhmm(g.received_at) +
                 ", tapée au POS (ticket " + (p.ticket_name || p.ticket_no) + " à " +
                 hhmm(p.datetime) + ", " + (delay >= 0 ? "+" : "") + delay.toFixed(0) +
                 " min) — commande annulée sur Glovo mais ticket caisse présent.",
-        ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
+        source_ref: g.order_id,
         amount_pos: p.total, amount_source: g.amount,
         payment_pos: p.payment_type,
-        payment_source: GLOVO_PAYMENT_MAP[g.payment_type],
-        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+        payment_source: GLOVO_PAYMENT_MAP[g.payment_type] }));
     });
 
     // Commandes livrées non appariées -> passe commune puis « absente ».
@@ -577,14 +588,12 @@
     // Tickets Glovo non appariés.
     pool.forEach(function (p, i) {
       if (!used.has(i)) {
-        anomalies.push(anomaly({ source: "Glovo", severity: "moyenne",
+        anomalies.push(posAnomaly(p, { source: "Glovo", severity: "moyenne",
           type: "Ticket Glovo au POS sans commande correspondante",
           detail: "Ticket POS " + p.ticket_name + " (" + hhmm(p.datetime) + ", " +
                   p.payment_type + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
                   " DH) classé Glovo mais sans commande Glovo dans la fenêtre.",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime,
-          amount_pos: p.total, payment_pos: p.payment_type,
-          file: "POS", row: p.row, when: dtFull(p.datetime) }));
+          amount_pos: p.total, payment_pos: p.payment_type }));
       }
     });
     return { anomalies: anomalies, missing: missing };
@@ -638,16 +647,15 @@
       usedT.add(best.ticket_no);
       best.channel = d.src === "Site" ? CH_SITE : CH_GLOVO;
       // Commande retrouvée sous un ticket sans numéro : info (pas une anomalie).
-      anomalies.push(anomaly({ source: d.src, severity: "info",
+      anomalies.push(posAnomaly(best, { source: d.src, severity: "info",
         type: "Commande rattachée (ticket sans numéro)",
         detail: "Commande " + d.src + " " + d.id + " (" +
                 (d.src === "Glovo" ? d.o.payment_type + ", " : "") + d.amount.toFixed(0) +
                 " DH) retrouvée au POS sous le ticket sans numéro " + best.ticket_no +
                 " (+" + pr.gap.toFixed(0) + " min). Présente — simple oubli de numéro.",
-        ticket_name: best.ticket_name || "(vide)", pos_datetime: best.datetime,
+        ticket_name: best.ticket_name || "(vide)",
         source_ref: String(d.id), amount_pos: best.total, amount_source: d.amount,
-        payment_pos: best.payment_type,
-        file: "POS", row: best.row, when: dtFull(best.datetime) }));
+        payment_pos: best.payment_type }));
     });
 
     demands.forEach(function (d, di) {
@@ -674,15 +682,14 @@
     // Tickets sans numéro restants -> à rattacher (souvent ventes comptoir).
     tickets.forEach(function (p) {
       if (usedT.has(p.ticket_no)) return;
-      anomalies.push(anomaly({ source: "POS", severity: "info",
+      anomalies.push(posAnomaly(p, { source: "POS", severity: "info",
         type: "Ticket sans numéro (à rattacher)",
         detail: "Ticket " + p.ticket_no + " du " + dateKey(p.datetime) + " à " +
                 hhmm(p.datetime) + " (" + p.payment_type + ", " +
                 (isNaN(p.total) ? "?" : p.total) + " DH) sans numéro — non rattaché à " +
                 "une commande Glovo ni Site.",
-        ticket_name: p.ticket_name || "(vide)", pos_datetime: p.datetime,
-        amount_pos: p.total, payment_pos: p.payment_type,
-        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+        ticket_name: p.ticket_name || "(vide)",
+        amount_pos: p.total, payment_pos: p.payment_type }));
     });
     return anomalies;
   }
@@ -718,13 +725,11 @@
     var anomalies = [];
     pos.filter(function (p) { return p.channel === CH_DINEIN; }).forEach(function (p) {
       if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
-        anomalies.push(anomaly({ source: "Sur place", severity: "moyenne",
+        anomalies.push(posAnomaly(p, { source: "Sur place", severity: "moyenne",
           type: "Mode de paiement inattendu (sur place/emporter)",
           detail: "Ticket " + p.ticket_name + " sur place/emporter payé '" +
                   p.payment_type + "' (attendu Cash ou Credit card).",
-          ticket_name: p.ticket_name, pos_datetime: p.datetime,
-          amount_pos: p.total, payment_pos: p.payment_type,
-          file: "POS", row: p.row, when: dtFull(p.datetime) }));
+          amount_pos: p.total, payment_pos: p.payment_type }));
       }
     });
     return anomalies;
@@ -746,7 +751,8 @@
         (groups[p.ticket_name] = groups[p.ticket_name] || []).push(p);
       }
     });
-    var handled = {};  // ticket_name -> true : retirer l'anomalie orpheline
+    var handled = {};  // ticket_name -> true : retirer l'anomalie orpheline (legacy)
+    var handledNo = {};  // ticket_no consommés par un cluster doublon
     Object.keys(groups).forEach(function (name) {
       var list = groups[name];
       if (list.length < 2) return;
@@ -767,6 +773,7 @@
       clusters.forEach(function (cl) {
         if (cl.length < 2) return;
         handled[name] = true;
+        cl.forEach(function (p) { if (p.ticket_no) handledNo[p.ticket_no] = true; });
         var first = cl[0], last = cl[cl.length - 1];
         var versions = cl.map(function (p, idx) {
           return "v" + (idx + 1) + " " + hhmm(p.datetime) + " " +
@@ -780,23 +787,24 @@
           diffs.push("paiement " + first.payment_type + "→" + last.payment_type);
         var extra = cl.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0) -
                     (isNaN(last.total) ? 0 : last.total);
-        anomalies.push(anomaly({
+        anomalies.push(posAnomaly(last, {
           source: cl[0].channel === CH_SITE ? "Site" : "Glovo", severity: "moyenne",
           type: "Ticket en double (correction)",
           detail: "Ticket " + name + " saisi " + cl.length + " fois (doublon / correction) : " +
                   versions + ". " + (diffs.length ? "Correction : " + diffs.join(", ") + ". " : "") +
                   "⚠️ La/les copie(s) en trop gonflent le total POS de " + extra.toFixed(0) +
                   " DH — vérifier qu'une version est bien annulée.",
-          ticket_name: name, pos_datetime: last.datetime, source_ref: name,
-          amount_pos: extra, file: "POS", row: last.row, when: dtFull(last.datetime) }));
+          source_ref: name,
+          amount_pos: extra, payment_pos: last.payment_type }));
       });
     });
 
     // Retirer les anomalies « orphelin » remplacées par une correction.
     return anomalies.filter(function (a) {
-      if (handled[a.ticket_name] &&
-          (a.type === "Ticket Glovo au POS sans commande correspondante" ||
-           a.type === "Ticket Site au POS sans commande correspondante")) return false;
+      if (a.type !== "Ticket Glovo au POS sans commande correspondante" &&
+          a.type !== "Ticket Site au POS sans commande correspondante") return true;
+      if (a.pos_ticket_no && handledNo[a.pos_ticket_no]) return false;
+      if (handled[a.ticket_name]) return false;
       return true;
     });
   }
@@ -1074,18 +1082,17 @@
   }
 
   function annotate(pos, anomalies) {
-    var byTicket = {}, sevTicket = {};
+    var byTicketNo = {}, sevTicketNo = {};
     anomalies.forEach(function (a) {
-      var tn = a.ticket_name;
-      if (tn && tn !== "" && tn !== "(vide)") {
-        (byTicket[tn] = byTicket[tn] || []).push("[" + a.type + "] " + a.detail);
-        (sevTicket[tn] = sevTicket[tn] || {})[a.severity] = true;
-      }
+      var no = a.pos_ticket_no;
+      if (!no) return;
+      (byTicketNo[no] = byTicketNo[no] || []).push("[" + a.type + "] " + a.detail);
+      (sevTicketNo[no] = sevTicketNo[no] || {})[a.severity] = true;
     });
     pos.forEach(function (p) {
-      var s = sevTicket[p.ticket_name] || {};
+      var s = sevTicketNo[p.ticket_no] || {};
       p.statut = (s.haute || s.moyenne) ? "⚠️ Anomalie" : (s.info ? "ℹ️ Info" : "✅ OK");
-      p.anomalies = (byTicket[p.ticket_name] || []).join(" | ");
+      p.anomalies = (byTicketNo[p.ticket_no] || []).join(" | ");
     });
   }
 
