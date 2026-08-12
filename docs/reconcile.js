@@ -510,7 +510,9 @@
       var res = [];
       pairs.forEach(function (pr) {
         if (matchSet.has(pr.gi) || used.has(pr.pi)) return;
-        matchSet.add(pr.gi); used.add(pr.pi); res.push(pr);
+        matchSet.add(pr.gi); used.add(pr.pi);
+        markGlovoPosMatch(list[pr.gi], pool[pr.pi]);
+        res.push(pr);
       });
       return res;
     }
@@ -594,7 +596,9 @@
       var res = [];
       pairs.forEach(function (pr) {
         if (matchSet.has(pr.gi) || used.has(pr.pi)) return;
-        matchSet.add(pr.gi); used.add(pr.pi); res.push(pr);
+        matchSet.add(pr.gi); used.add(pr.pi);
+        markGlovoPosMatch(list[pr.gi], pool[pr.pi]);
+        res.push(pr);
       });
       return res;
     }
@@ -693,6 +697,7 @@
       var d = demands[pr.di], best = tickets[pr.ti];
       usedT.add(best.ticket_no);
       best.channel = d.src === "Site" ? CH_SITE : CH_GLOVO;
+      if (d.src === "Glovo") markGlovoPosMatch(d.o, best);
       // Commande retrouvée sous un ticket sans numéro : info (pas une anomalie).
       anomalies.push(posAnomaly(best, { source: d.src, severity: "info",
         type: "Commande rattachée (ticket sans numéro)",
@@ -880,6 +885,13 @@
     });
   }
 
+  function markGlovoPosMatch(g, p) {
+    if (!g || !p) return;
+    g.matched_pos_ticket_no = p.ticket_no;
+    p.matched_glovo_order = g.order_id;
+    if ((g.status || "").toLowerCase() === "cancelled") g.matched_pos = true;
+  }
+
   function glovoMatchForPosLine(p, glovo, wideWindow) {
     if (!glovo || p.channel !== CH_GLOVO || !p.datetime) return null;
     var afterMin = wideWindow ? 120 : WINDOW_AFTER_MIN;
@@ -970,6 +982,7 @@
     return parts + (only.length ? " — " + only[0] : "");
   }
 
+  function flagMisusedGlovoNumber(p, matchedLine, matchedG) {
     var amt = isNaN(p.total) ? 0 : p.total;
     var amtTxt = amt > AMOUNT_TOL ? amt.toFixed(0) + " DH" :
       (amt === 0 ? "0 DH (annulée ou montant nul — vérifier)" : "?");
@@ -1106,6 +1119,102 @@
     });
   }
 
+  // Anomalies complémentaires pour expliquer les écarts financiers quand le
+  // rapprochement ticket↔commande ne produit pas déjà une anomalie contributive.
+  function appendFinancialGapAnomalies(pos, glovo, site, anomalies) {
+    if (site) {
+      var siteById = {};
+      site.forEach(function (o) { siteById[o.identifiant] = o; });
+      pos.forEach(function (p) {
+        if (p.channel !== CH_SITE) return;
+        var o = siteById[p.ticket_name];
+        if (!o) return;
+        if ((o.delivery_status || "").toUpperCase() === "DELIVERED") return;
+        if (anomalies.some(function (a) {
+          return a.pos_ticket_no === p.ticket_no && a.source === "Site";
+        })) return;
+        var st = o.delivery_status || o.last_status || "vide";
+        anomalies.push(posAnomaly(p, {
+          source: "Site", severity: "moyenne",
+          type: "Commande site au POS — statut non livré",
+          detail: "Ticket POS " + p.ticket_name + " (" +
+                  (isNaN(p.total) ? "?" : p.total.toFixed(0)) + " DH, " + p.payment_type +
+                  ") : commande site présente mais pas « DELIVERED » (statut : " + st +
+                  ") — comptée au POS, absente des livrées site (col L).",
+          source_ref: o.identifiant,
+          amount_pos: p.total, amount_source: 0,
+          payment_pos: p.payment_type }));
+      });
+    }
+
+    if (!glovo) return;
+
+    function glovoCountedInFinancial(g) {
+      var st = (g.status || "").toLowerCase();
+      if (st === "delivered") return true;
+      return st === "cancelled" && g.matched_pos;
+    }
+    function hasGlovoFinAnomaly(orderId, posNo, bucket) {
+      return anomalies.some(function (a) {
+        if (a.source !== "Glovo") return false;
+        if (orderId && a.source_ref === String(orderId)) {
+          if (a.type === "Commande Glovo absente du POS" ||
+              a.type === "Commande Glovo sans heure de réception" ||
+              a.type === "Commande Glovo Online absente du POS (écart financier)" ||
+              a.type === "Commande Glovo Cash absente du POS (écart financier)") return true;
+        }
+        if (posNo && a.pos_ticket_no === posNo) {
+          if (a.type === "Ticket Glovo au POS sans commande correspondante" ||
+              a.type === "Ticket Glovo Online au POS sans appariement (écart financier)" ||
+              a.type === "Ticket Glovo Cash au POS sans appariement (écart financier)") return true;
+        }
+        return false;
+      });
+    }
+
+    glovo.forEach(function (g) {
+      if (!glovoCountedInFinancial(g)) return;
+      if (g.matched_pos_ticket_no) return;
+      if (hasGlovoFinAnomaly(g.order_id, null, g.payment_type)) return;
+      var payLabel = g.payment_type === "Cash" ? "Cash" : "Online";
+      var expPay = GLOVO_PAYMENT_MAP[g.payment_type] || "Bank Transfer";
+      anomalies.push(anomaly({
+        source: "Glovo", severity: "haute",
+        type: "Commande Glovo " + payLabel + " absente du POS (écart financier)",
+        detail: "Commande Glovo " + g.order_id + " (" + g.amount.toFixed(0) +
+                " DH " + payLabel + ") comptée côté source mais aucun ticket POS « " +
+                expPay + " » apparié.",
+        source_ref: String(g.order_id),
+        amount_source: g.amount,
+        payment_source: expPay,
+        file: "Glovo", row: g.row,
+        when: g.received_at ? dtFull(g.received_at) : "" }));
+    });
+
+    pos.forEach(function (p) {
+      if (p.channel !== CH_GLOVO) return;
+      if (p.matched_glovo_order) return;
+      if (isNaN(p.total) || p.total <= AMOUNT_TOL) return;
+      if (anomalies.some(function (a) {
+        return a.pos_ticket_no === p.ticket_no && a.type === "Ticket en double (correction)";
+      })) return;
+      if (anomalies.some(function (a) {
+        return a.type === "Ticket en double (correction)" && a.source === "Glovo" &&
+               a.payment_pos === p.payment_type &&
+               (a.source_ref === p.ticket_name || a.ticket_name === p.ticket_name);
+      })) return;
+      if (hasGlovoFinAnomaly(null, p.ticket_no, p.payment_type)) return;
+      var bucket = p.payment_type === "Cash" ? "Cash" : "Online";
+      anomalies.push(posAnomaly(p, {
+        source: "Glovo", severity: "moyenne",
+        type: "Ticket Glovo " + bucket + " au POS sans appariement (écart financier)",
+        detail: "Ticket POS " + p.ticket_name + " (" + hhmm(p.datetime) + ", " +
+                p.total.toFixed(0) + " DH " + p.payment_type + ") compté au POS " +
+                bucket + " mais sans commande Glovo " + bucket + " appariée.",
+        amount_pos: p.total, payment_pos: p.payment_type }));
+    });
+  }
+
   // ----------------------------------------------------------------------- //
   // Orchestration
   // ----------------------------------------------------------------------- //
@@ -1161,6 +1270,7 @@
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
     anomalies = detectDuplicates(pos, anomalies, glovo);  // doublons/corrections
+    appendFinancialGapAnomalies(pos, glovo, site, anomalies);
     enrichProductConfirmation(anomalies, pos, glovo);
 
     annotate(pos, anomalies);
@@ -1291,6 +1401,16 @@
       else adj.glovo_pos_bt -= ap;
     } else if (t === "Ticket Site au POS sans commande correspondante") {
       adj.site_pos -= ap;
+    } else if (t === "Commande site au POS — statut non livré") {
+      adj.site_pos -= ap;
+    } else if (t === "Commande Glovo Online absente du POS (écart financier)") {
+      adj.glovo_src_online -= as;
+    } else if (t === "Commande Glovo Cash absente du POS (écart financier)") {
+      adj.glovo_src_cash -= as;
+    } else if (t === "Ticket Glovo Online au POS sans appariement (écart financier)") {
+      adj.glovo_pos_bt -= ap;
+    } else if (t === "Ticket Glovo Cash au POS sans appariement (écart financier)") {
+      adj.glovo_pos_cash -= ap;
     } else if (t === "Paiement POS absent du TPE") {
       adj.pos_cc -= ap;
     } else if (t === "Transaction TPE absente du POS") {
