@@ -186,7 +186,7 @@ def load_glovo(source) -> pd.DataFrame:
 
     keep = [
         "order_id", "payment_type", "status", "received_at", "earnings",
-        "subtotal", "discount_funded",
+        "subtotal", "discount_funded", "order_items",
     ]
     df = df[[c for c in keep if c in df.columns]].copy()
 
@@ -201,6 +201,10 @@ def load_glovo(source) -> pd.DataFrame:
         df["discount_funded"] = pd.to_numeric(df["discount_funded"], errors="coerce").fillna(0)
     else:
         df["discount_funded"] = 0.0
+    if "Order Items" in df.columns:
+        df["order_items"] = df["Order Items"].apply(_clean_str)
+    else:
+        df["order_items"] = ""
     # Montant de rapprochement Glovo — voir CURSOR_JOURNAL.md (2026-08-12 : W − AE).
     df["amount"] = df["subtotal"] - df["discount_funded"] if "subtotal" in df.columns else pd.NA
 

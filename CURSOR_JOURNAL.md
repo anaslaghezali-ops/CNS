@@ -292,6 +292,22 @@ export Excel via `docs/app.js`.
 
 ---
 
+### 2026-08-12 — Contrôle produits (POS J / Glovo AY) + doublons clarifiés
+
+**Demandé par** : gérant.
+
+**Produits** : chargement `Designations (Reference)` (POS) et `Order Items` (Glovo).
+Score de similarité affiché sur les anomalies liées — **contrôle secondaire**, pas
+clé d'appariement. Suggestion par contenu sur commandes Glovo « absentes ».
+
+**Doublons / correction** : le message indique quel paiement **retenir** selon la
+commande Glovo (ex. ticket 878 → Glovo Cash → retenir v1 Cash, annuler v2 Bank
+Transfer). L'écart financier retire la copie en trop du bon bucket de paiement.
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/loaders.py`
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :

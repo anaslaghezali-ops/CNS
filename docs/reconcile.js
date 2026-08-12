@@ -156,6 +156,7 @@
         hour: s(r["Hour"]),
         user: s(r["User"]),
         ticket_name: s(r["Ticket name"]),
+        designations: s(r["Designations (Reference)"]),
         total: num(r["Total"]),
         payment_type: s(r["Payment type"]),
         datetime: toDate(s(r["Date"]) + " " + s(r["Hour"])),
@@ -178,6 +179,7 @@
         earnings: num(r["Estimated earnings"]),
         subtotal: num(r["Subtotal"]),
         discount_funded: num(r["Discount Funded by you"]),
+        order_items: s(r["Order Items"]),
         // Montant rapprochement Glovo = col W − col AE — voir CURSOR_JOURNAL.md
         amount: (function () {
           var sub = num(r["Subtotal"]);
@@ -781,7 +783,103 @@
   }
 
   // ----------------------------------------------------------------------- //
-  // DOUBLONS / CORRECTIONS : un même NUMÉRO (Glovo 1-3 chiffres, Site) saisi
+  // Produits (POS col J / Glovo col AY) — contrôle secondaire, pas clé d'appariement
+  // ----------------------------------------------------------------------- //
+  var PRODUCT_SKIP = { "dh": 1, "menu": 1, "x": 1, "ajustement": 1, "compose": 1, "ton": 1 };
+
+  function productTokens(text) {
+    if (!text) return [];
+    var t = String(text).toLowerCase()
+      .replace(/\d+/g, " ")
+      .replace(/[×x]/gi, " ")
+      .replace(/\[[^\]]*\]/g, " ")
+      .replace(/[^a-zàâäéèêëïîôùûüç0-9\s]/gi, " ");
+    var out = [];
+    t.split(/[\s,]+/).forEach(function (w) {
+      w = w.trim();
+      if (w.length > 2 && !PRODUCT_SKIP[w]) out.push(w);
+    });
+    return out;
+  }
+
+  function productSimilarity(posText, glovoText) {
+    var ta = productTokens(posText), tb = productTokens(glovoText);
+    if (!ta.length || !tb.length) return 0;
+    var setA = {}, setB = {}, inter = 0;
+    ta.forEach(function (w) { setA[w] = 1; });
+    tb.forEach(function (w) {
+      if (setA[w]) inter++;
+      setB[w] = 1;
+    });
+    var union = 0;
+    Object.keys(setA).forEach(function (w) { union++; });
+    Object.keys(setB).forEach(function (w) { if (!setA[w]) union++; });
+    return union ? inter / union : 0;
+  }
+
+  function findGlovoForDuplicate(cluster, glovo) {
+    if (!glovo || cluster[0].channel !== CH_GLOVO) return null;
+    var mid = cluster[0].datetime;
+    if (!mid) return null;
+    var amounts = cluster.map(function (p) { return p.total; });
+    var best = null, bestGap = 1e9;
+    glovo.forEach(function (g) {
+      if ((g.status || "").toLowerCase() !== "delivered" || !g.received_at) return;
+      var gap = Math.abs(minutesBetween(mid, g.received_at));
+      if (gap > 120) return;
+      var ok = amounts.some(function (a) {
+        return !isNaN(a) && !isNaN(g.amount) && Math.abs(a - g.amount) <= AMOUNT_TOL;
+      });
+      if (!ok) return;
+      if (gap < bestGap) { bestGap = gap; best = g; }
+    });
+    if (!best) return null;
+    return {
+      order_id: best.order_id,
+      payment_type: best.payment_type,
+      expected_pos: GLOVO_PAYMENT_MAP[best.payment_type],
+      order_items: best.order_items || "",
+    };
+  }
+
+  function enrichProductConfirmation(anomalies, pos, glovo) {
+    if (!glovo || !pos.length) return;
+    var byNo = {};
+    pos.forEach(function (p) { if (p.ticket_no) byNo[p.ticket_no] = p; });
+    var byOrder = {};
+    glovo.forEach(function (g) { if (g.order_id) byOrder[g.order_id] = g; });
+
+    anomalies.forEach(function (a) {
+      var g = a.source_ref ? byOrder[a.source_ref] : null;
+      var p = a.pos_ticket_no ? byNo[a.pos_ticket_no] : null;
+      if (g && p && p.designations && g.order_items) {
+        var score = productSimilarity(p.designations, g.order_items);
+        if (score >= 0.2) {
+          var pct = Math.round(score * 100);
+          a.products_confirm = pct;
+          var tag = score >= 0.4 ? "✓ Produits compatibles" : "~ Produits partiellement compatibles";
+          a.detail += " [" + tag + " " + pct + "% — contrôle contenu, pas clé d'appariement]";
+        }
+        return;
+      }
+      // Commande absente : suggestion par contenu + heure (info seulement)
+      if (g && !p && (a.type === "Commande Glovo absente du POS") && g.order_items && g.received_at) {
+        var bestP = null, bestScore = 0;
+        pos.forEach(function (px) {
+          if (px.channel !== CH_GLOVO || !px.datetime || !px.designations) return;
+          var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
+          if (gap > 120) return;
+          var sc = productSimilarity(px.designations, g.order_items);
+          if (sc > bestScore) { bestScore = sc; bestP = px; }
+        });
+        if (bestP && bestScore >= 0.35) {
+          a.detail += " [Suggestion : ticket " + bestP.ticket_name + " ligne " + bestP.row +
+                      " — produits ~" + Math.round(bestScore * 100) + " % compatibles, à vérifier]";
+        }
+      }
+    });
+  }
+
   // plusieurs fois à quelques minutes d'intervalle = commande re-tapée (souvent
   // une correction). On ne traite QUE les numéros (jamais sp/emp, qui peuvent
   // légitimement se répéter). Remplace l'anomalie « orphelin » par une
@@ -789,7 +887,7 @@
   // ----------------------------------------------------------------------- //
   var DUP_WINDOW_MIN = 30;
 
-  function detectDuplicates(pos, anomalies) {
+  function detectDuplicates(pos, anomalies, glovo) {
     var groups = {};
     pos.forEach(function (p) {
       if ((p.channel === CH_GLOVO || p.channel === CH_SITE) && /^\d+$/.test(p.ticket_name)) {
@@ -820,6 +918,15 @@
         handled[name] = true;
         cl.forEach(function (p) { if (p.ticket_no) handledNo[p.ticket_no] = true; });
         var first = cl[0], last = cl[cl.length - 1];
+        var glovoRef = findGlovoForDuplicate(cl, glovo);
+        var retainPay = glovoRef ? glovoRef.expected_pos : last.payment_type;
+        var retainIdx = -1;
+        for (var ri = 0; ri < cl.length; ri++) {
+          if (cl[ri].payment_type === retainPay) { retainIdx = ri; break; }
+        }
+        if (retainIdx < 0) retainIdx = cl.length - 1;
+        var retainVer = cl[retainIdx];
+        var dupVers = cl.filter(function (_, i) { return i !== retainIdx; });
         var versions = cl.map(function (p, idx) {
           return "v" + (idx + 1) + " " + hhmm(p.datetime) + " " +
                  (isNaN(p.total) ? "?" : p.total.toFixed(0)) + " DH " + p.payment_type +
@@ -831,16 +938,37 @@
         if (first.payment_type !== last.payment_type)
           diffs.push("paiement " + first.payment_type + "→" + last.payment_type);
         var extra = cl.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0) -
-                    (isNaN(last.total) ? 0 : last.total);
-        anomalies.push(posAnomaly(last, {
+                    (isNaN(retainVer.total) ? 0 : retainVer.total);
+        var dupPay = dupVers.length === 1 ? dupVers[0].payment_type : retainPay;
+        var retainNote = "";
+        if (glovoRef) {
+          retainNote = " Commande Glovo " + glovoRef.order_id + " (" + glovoRef.payment_type +
+            ") → paiement POS à retenir : " + retainPay + ". Retenir v" + (retainIdx + 1) +
+            " (ligne " + retainVer.row + ", " + retainVer.payment_type + "). À annuler au POS : " +
+            dupVers.map(function (p) {
+              return "v" + (cl.indexOf(p) + 1) + " ligne " + p.row + " (" + p.payment_type + ")";
+            }).join(", ") + ".";
+          if (glovoRef.order_items && retainVer.designations) {
+            var ps = productSimilarity(retainVer.designations, glovoRef.order_items);
+            if (ps >= 0.25) {
+              retainNote += " [✓ Produits compatibles " + Math.round(ps * 100) + "%]";
+            }
+          }
+        } else if (first.payment_type !== last.payment_type) {
+          retainNote = " Sans commande Glovo retrouvée : retenir en principe la dernière saisie v" +
+            cl.length + " (" + last.payment_type + ") si c'est la correction — vérifier manuellement.";
+        }
+        anomalies.push(posAnomaly(retainVer, {
           source: cl[0].channel === CH_SITE ? "Site" : "Glovo", severity: "moyenne",
           type: "Ticket en double (correction)",
           detail: "Ticket " + name + " saisi " + cl.length + " fois (doublon / correction) : " +
-                  versions + ". " + (diffs.length ? "Correction : " + diffs.join(", ") + ". " : "") +
+                  versions + ". " + (diffs.length ? "Évolution : " + diffs.join(", ") + ". " : "") +
                   "⚠️ La/les copie(s) en trop gonflent le total POS de " + extra.toFixed(0) +
-                  " DH — vérifier qu'une version est bien annulée.",
-          source_ref: name,
-          amount_pos: extra, payment_pos: last.payment_type }));
+                  " DH — une version doit être annulée au POS." + retainNote,
+          source_ref: glovoRef ? glovoRef.order_id : name,
+          amount_pos: extra,
+          payment_pos: dupPay,
+          payment_source: retainPay }));
       });
     });
 
@@ -908,7 +1036,8 @@
     anomalies = anomalies.concat(reconcileDinein(pos));
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
-    anomalies = detectDuplicates(pos, anomalies);  // doublons/corrections
+    anomalies = detectDuplicates(pos, anomalies, glovo);  // doublons/corrections
+    enrichProductConfirmation(anomalies, pos, glovo);
 
     annotate(pos, anomalies);
     var summary = buildSummary(pos, anomalies, glovo, naps, site);
@@ -1055,6 +1184,7 @@
       }
     } else if (t === "Ticket en double (correction)") {
       if (a.source === "Glovo") {
+        // payment_pos = mode de la copie en trop (à retirer du total POS)
         if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;
         else adj.glovo_pos_bt -= ap;
       } else if (a.source === "Site") {
