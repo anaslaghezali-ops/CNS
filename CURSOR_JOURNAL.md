@@ -518,6 +518,18 @@ le reste = cash.
 
 ---
 
+### 2026-08-12 — Glovo Total POS = Online + Cash
+
+**Problème** : ligne « Glovo Total » POS = somme brute tous tickets Glovo (incl. CB),
+alors que Online + Cash ne comptaient que BT et Cash → totaux POS incohérents.
+
+**Fix** : Total POS = Bank Transfer Glovo + Cash Glovo (comme la source).
+Note si tickets Glovo en CB/autre hors décomposition Online/Cash.
+
+**Fichiers** : `docs/reconcile.js`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown
