@@ -201,7 +201,7 @@ def load_glovo(source) -> pd.DataFrame:
         df["discount_funded"] = pd.to_numeric(df["discount_funded"], errors="coerce").fillna(0)
     else:
         df["discount_funded"] = 0.0
-  # Montant de rapprochement Glovo — voir CURSOR_JOURNAL.md (2026-08-12 : W − AE).
+    # Montant de rapprochement Glovo — voir CURSOR_JOURNAL.md (2026-08-12 : W − AE).
     df["amount"] = df["subtotal"] - df["discount_funded"] if "subtotal" in df.columns else pd.NA
 
     df = df.reset_index(drop=True)
