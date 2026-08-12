@@ -1372,6 +1372,20 @@
     return { anomalies: anomalies, pos: pos, summary: summary };
   }
 
+  function listPosDates(pos) {
+    return Array.from(posDateSet(pos)).sort();
+  }
+
+  function runDailyBreakdown(pos, glovo, naps, site) {
+    var byDay = {};
+    listPosDates(pos).forEach(function (dk) {
+      var dayPos = pos.filter(function (p) { return dateKey(p.datetime) === dk; });
+      if (!dayPos.length) return;
+      byDay[dk] = run(dayPos, glovo, naps, site);
+    });
+    return byDay;
+  }
+
   // Réconciliation FINANCIÈRE : totaux par mode de paiement × canal, et écarts
   // POS vs source (TPE/NAPS, Glovo, Site).
   function computeFinancial(pos, glovo, naps, site, posDates) {
@@ -1637,7 +1651,7 @@
   // ----------------------------------------------------------------------- //
   var CNS = {
     loadPOS: loadPOS, loadGlovo: loadGlovo, loadNAPS: loadNAPS, loadSite: loadSite,
-    classify: classify, run: run,
+    classify: classify, run: run, listPosDates: listPosDates, runDailyBreakdown: runDailyBreakdown,
     sumFinancialAdjustments: sumFinancialAdjustments,
     applyFinancialAdjustments: applyFinancialAdjustments,
     getFinancialContributors: getFinancialContributors,

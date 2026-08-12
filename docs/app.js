@@ -8,6 +8,10 @@
   var SEV_BADGE = { haute: "🔴 Haute", moyenne: "🟠 Moyenne", info: "🔵 Info" };
   var SEV_ORDER = { haute: 0, moyenne: 1, info: 2 };
   var finDetailLineKey = null;
+  var activeDayKey = null;  // null = vue générale · sinon clé YYYY-MM-DD
+
+  var MONTHS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin",
+                   "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 
   // ---- Sélection de fichiers -------------------------------------------- //
   document.querySelectorAll(".drop").forEach(function (drop) {
@@ -67,7 +71,9 @@
         var naps = sheets[2] ? CNS.loadNAPS(sheets[2]) : null;
         var site = sheets[3] ? CNS.loadSite(sheets[3]) : null;
         state = CNS.run(pos, glovo, naps, site);
+        state.byDay = CNS.runDailyBreakdown(pos, glovo, naps, site);
         state.validated = {};
+        activeDayKey = null;
         finDetailLineKey = null;
         render();
       } catch (err) {
@@ -89,14 +95,34 @@
     return state && state.validated && state.validated[id];
   }
 
+  function getViewState() {
+    if (!state) return null;
+    if (activeDayKey && state.byDay && state.byDay[activeDayKey]) return state.byDay[activeDayKey];
+    return state;
+  }
+
+  function fmtDayLabel(dk) {
+    var p = dk.split("-");
+    if (p.length !== 3) return dk;
+    return p[2] + " " + MONTHS_FR[+p[1] - 1] + " " + p[0];
+  }
+
+  function fmtDayShort(dk) {
+    var p = dk.split("-");
+    if (p.length !== 3) return dk;
+    return p[2] + "/" + p[1];
+  }
+
   function activeAnomalies() {
-    if (!state) return [];
-    return state.anomalies.filter(function (a) { return !isValidated(a.id); });
+    var vs = getViewState();
+    if (!vs) return [];
+    return vs.anomalies.filter(function (a) { return !isValidated(a.id); });
   }
 
   function validatedAnomalies() {
-    if (!state) return [];
-    return state.anomalies.filter(function (a) { return isValidated(a.id); });
+    var vs = getViewState();
+    if (!vs) return [];
+    return vs.anomalies.filter(function (a) { return isValidated(a.id); });
   }
 
   function fmtTicketLabel(a) {
@@ -130,9 +156,10 @@
     render();
   }
 
-  function refreshPosStatuts() {
-    var active = activeAnomalies();
-    state.pos.forEach(function (p) {
+  function refreshPosStatutsFor(runResult) {
+    if (!runResult) return;
+    var active = runResult.anomalies.filter(function (a) { return !isValidated(a.id); });
+    runResult.pos.forEach(function (p) {
       var related = active.filter(function (a) { return anomalyMatchesPos(a, p); });
       var sev = {};
       related.forEach(function (a) { sev[a.severity] = true; });
@@ -142,6 +169,15 @@
         return "[" + a.type + "] " + a.detail;
       }).join(" | ");
     });
+  }
+
+  function refreshPosStatuts() {
+    refreshPosStatutsFor(state);
+    if (state && state.byDay) {
+      Object.keys(state.byDay).forEach(function (dk) {
+        refreshPosStatutsFor(state.byDay[dk]);
+      });
+    }
   }
 
   function recomputeCounts() {
@@ -166,10 +202,49 @@
     return CNS.applyFinancialAdjustments(state.summary.financial, adj);
   }
 
+  function getAdjustedFinancial() {
+    var vs = getViewState();
+    if (!vs || !vs.summary.financial) return null;
+    var validated = validatedAnomalies();
+    if (!validated.length) return vs.summary.financial;
+    var adj = CNS.sumFinancialAdjustments(validated);
+    return CNS.applyFinancialAdjustments(vs.summary.financial, adj);
+  }
+
+  function renderDayTabs() {
+    var el = document.getElementById("day-tabs");
+    if (!state || !state.byDay || Object.keys(state.byDay).length <= 1) {
+      el.classList.add("hidden");
+      el.innerHTML = "";
+      return;
+    }
+    el.classList.remove("hidden");
+    var dates = Object.keys(state.byDay).sort();
+    var html = '<button type="button" class="day-tab' +
+      (activeDayKey === null ? " active" : "") + '" data-day="">📊 Général</button>';
+    dates.forEach(function (d) {
+      html += '<button type="button" class="day-tab' +
+        (activeDayKey === d ? " active" : "") + '" data-day="' + escapeHtml(d) + '">📅 ' +
+        escapeHtml(fmtDayLabel(d)) + "</button>";
+    });
+    el.innerHTML = html;
+    el.querySelectorAll(".day-tab").forEach(function (btn) {
+      btn.onclick = function () {
+        var day = btn.getAttribute("data-day");
+        activeDayKey = day || null;
+        finDetailLineKey = null;
+        render();
+      };
+    });
+  }
+
   // ---- Rendu ------------------------------------------------------------- //
   function render() {
     document.getElementById("results").classList.remove("hidden");
-    var sm = state.summary;
+    var vs = getViewState();
+    if (!vs) return;
+    var sm = vs.summary;
+    renderDayTabs();
     var counts = recomputeCounts();
 
     var metrics = [
@@ -189,11 +264,22 @@
     }).join("");
 
     var period = document.getElementById("period");
-    var txt = "📅 Période analysée (d'après le POS) : <b>" +
-              escapeHtml(sm.pos_date_min) + "</b> → <b>" + escapeHtml(sm.pos_date_max) + "</b>.";
+    var txt;
+    if (activeDayKey) {
+      txt = "📅 Journée analysée : <b>" + escapeHtml(fmtDayLabel(activeDayKey)) + "</b> " +
+            "(vue isolée — Glovo / Site / NAPS filtrés sur cette date POS).";
+    } else {
+      txt = "📅 Période analysée (d'après le POS) : <b>" +
+            escapeHtml(sm.pos_date_min) + "</b> → <b>" + escapeHtml(sm.pos_date_max) + "</b>.";
+      if (state.byDay && Object.keys(state.byDay).length > 1) {
+        txt += " Utilisez les onglets ci-dessous pour analyser <b>jour par jour</b>.";
+      }
+    }
     var ex = [];
-    if (sm.glovo_excluded) ex.push(sm.glovo_excluded + " commande(s) Glovo");
-    if (sm.site_excluded) ex.push(sm.site_excluded + " commande(s) Site");
+    if (!activeDayKey) {
+      if (sm.glovo_excluded) ex.push(sm.glovo_excluded + " commande(s) Glovo");
+      if (sm.site_excluded) ex.push(sm.site_excluded + " commande(s) Site");
+    }
     if (ex.length) txt += " " + ex.join(" et ") + " hors de cette période ont été ignorée(s).";
     period.innerHTML = txt;
 
@@ -438,8 +524,10 @@
   }
 
   function renderPos() {
+    var vs = getViewState();
+    if (!vs) return;
     var onlyAnom = document.getElementById("only-anom").checked;
-    var rows = state.pos.filter(function (p) {
+    var rows = vs.pos.filter(function (p) {
       return !onlyAnom || (p.statut && p.statut.indexOf("Anomalie") !== -1);
     });
     var cols = [
@@ -471,51 +559,82 @@
     var fin = getAdjustedFinancial();
     var wb = XLSX.utils.book_new();
 
-    var resume = [
-      ["Indicateur", "Valeur"],
-      ["Période analysée (POS)", (sm.pos_date_min || "") + " → " + (sm.pos_date_max || "")],
-      ["Transactions POS", sm.pos_transactions],
-      ["Total POS (DH)", Math.round(sm.pos_total * 100) / 100],
-      ["Commandes Glovo (livrées, période)", sm.glovo_orders],
-      ["Commandes Glovo hors période (ignorées)", sm.glovo_excluded || 0],
-      ["Transactions NAPS", sm.naps_transactions],
-      ["Commandes Site (période)", sm.site_orders],
-      ["Commandes Site hors période (ignorées)", sm.site_excluded || 0],
-      ["", ""],
-      ["Anomalies (Haute + Moyenne)", counts.n_anomalies],
-      ["  dont haute", counts.severity.haute || 0],
-      ["  dont moyenne", counts.severity.moyenne || 0],
-      ["Anomalies validées (hors calcul)", counts.n_validated || 0],
-      ["Infos (rattachements & notes)", counts.n_infos || 0],
-      ["", ""],
-    ];
-    Object.keys(sm.channels).forEach(function (k) {
-      resume.push(["POS — " + k, sm.channels[k]]);
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(resume), "Résumé");
+    function buildResumeRows(runSm, runCounts, label) {
+      var rows = [
+        ["Indicateur", "Valeur"],
+        ["Vue", label || "Général"],
+        ["Période / journée (POS)", (runSm.pos_date_min || "") + " → " + (runSm.pos_date_max || "")],
+        ["Transactions POS", runSm.pos_transactions],
+        ["Total POS (DH)", Math.round(runSm.pos_total * 100) / 100],
+        ["Commandes Glovo (livrées, période)", runSm.glovo_orders],
+        ["Commandes Glovo hors période (ignorées)", runSm.glovo_excluded || 0],
+        ["Transactions NAPS", runSm.naps_transactions],
+        ["Commandes Site (période)", runSm.site_orders],
+        ["Commandes Site hors période (ignorées)", runSm.site_excluded || 0],
+        ["", ""],
+        ["Anomalies (Haute + Moyenne)", runCounts.n_anomalies],
+        ["  dont haute", runCounts.severity.haute || 0],
+        ["  dont moyenne", runCounts.severity.moyenne || 0],
+        ["Anomalies validées (hors calcul)", runCounts.n_validated || 0],
+        ["Infos (rattachements & notes)", runCounts.n_infos || 0],
+        ["", ""],
+      ];
+      Object.keys(runSm.channels).forEach(function (k) {
+        rows.push(["POS — " + k, runSm.channels[k]]);
+      });
+      return rows;
+    }
 
-    if (fin) {
+    function countsForRun(runResult) {
+      var sev = { haute: 0, moyenne: 0, info: 0 };
+      runResult.anomalies.forEach(function (a) {
+        if (isValidated(a.id)) return;
+        sev[a.severity] = (sev[a.severity] || 0) + 1;
+      });
+      var nVal = runResult.anomalies.filter(function (a) { return isValidated(a.id); }).length;
+      return {
+        n_anomalies: sev.haute + sev.moyenne,
+        n_infos: sev.info,
+        severity: sev,
+        n_validated: nVal,
+      };
+    }
+
+    function adjustedFinFor(runResult) {
+      if (!runResult.summary.financial) return null;
+      var validated = runResult.anomalies.filter(function (a) { return isValidated(a.id); });
+      if (!validated.length) return runResult.summary.financial;
+      var adj = CNS.sumFinancialAdjustments(validated);
+      return CNS.applyFinancialAdjustments(runResult.summary.financial, adj);
+    }
+
+    function buildFinRows(runFin) {
+      if (!runFin) return [];
       var frows = [["Réconciliation financière (Écart = source − POS)"], []];
-      if (fin.adjustments_applied) {
+      if (runFin.adjustments_applied) {
         frows.push(["(Anomalies validées exclues des montants ci-dessous)"]);
         frows.push([]);
       }
       frows.push(["Source", "Côté POS (libellé)", "Montant POS", "Côté source (libellé)", "Montant source", "Écart"]);
-      fin.lines.forEach(function (l) {
+      runFin.lines.forEach(function (l) {
         frows.push([l.source, l.pos_label, Math.round(l.pos), l.src_label, Math.round(l.src), Math.round(l.ecart)]);
         if (l.note) frows.push(["", l.note]);
       });
       frows.push([], ["Répartition POS : mode de paiement × canal"], []);
-      frows.push(["Canal"].concat(fin.pays, ["Total"]));
-      var colTot = {}; fin.pays.forEach(function (p) { colTot[p] = 0; });
-      Object.keys(fin.matrix).forEach(function (ch) {
-        var row = fin.matrix[ch], rt = 0;
-        var cells = fin.pays.map(function (p) { var v = row[p] || 0; rt += v; colTot[p] += v; return Math.round(v); });
+      frows.push(["Canal"].concat(runFin.pays, ["Total"]));
+      var colTot = {}; runFin.pays.forEach(function (p) { colTot[p] = 0; });
+      Object.keys(runFin.matrix).forEach(function (ch) {
+        var row = runFin.matrix[ch], rt = 0;
+        var cells = runFin.pays.map(function (p) {
+          var v = row[p] || 0; rt += v; colTot[p] += v; return Math.round(v);
+        });
         frows.push([ch].concat(cells, [Math.round(rt)]));
       });
-      var grand = 0; fin.pays.forEach(function (p) { grand += colTot[p]; });
-      frows.push(["Total"].concat(fin.pays.map(function (p) { return Math.round(colTot[p]); }), [Math.round(grand)]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(frows), "Réconciliation €");
+      var grand = 0; runFin.pays.forEach(function (p) { grand += colTot[p]; });
+      frows.push(["Total"].concat(runFin.pays.map(function (p) {
+        return Math.round(colTot[p]);
+      }), [Math.round(grand)]));
+      return frows;
     }
 
     function toRow(a, validated) {
@@ -531,30 +650,64 @@
         "Détail": a.detail,
       };
     }
-    var byOrder = function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; };
 
-    var anom = state.anomalies.filter(function (a) { return a.severity !== "info"; })
-                              .sort(byOrder).map(function (a) {
-      return toRow(a, isValidated(a.id));
-    });
-    if (!anom.length) anom = [{ "Gravité": "✅ Aucune anomalie", "Détail": "Tout est réconcilié." }];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anom), "Anomalies");
+    function sheetSafe(name) {
+      return String(name).replace(/[\\/*?:\[\]]/g, "-").slice(0, 31);
+    }
 
-    var infos = activeAnomalies().filter(function (a) { return a.severity === "info"; }).map(function (a) {
-      return toRow(a, false);
-    });
-    if (!infos.length) infos = [{ "Gravité": "—", "Détail": "Aucune info." }];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(infos), "Infos");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+      buildResumeRows(sm, counts, "Général — toute la période")), "Résumé");
 
-    var posRows = state.pos.map(function (p) {
-      return {
-        "Ticket No.": p.ticket_no, "Date": p.date, "Heure": p.hour, "Caissier": p.user,
-        "Ticket name": p.ticket_name, "Canal détecté": p.channel,
-        "Total": isNaN(p.total) ? "" : p.total, "Mode de paiement": p.payment_type,
-        "Statut": p.statut, "Anomalies détectées": p.anomalies,
-      };
-    });
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(posRows), "POS annoté");
+    if (fin) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFinRows(fin)), "Réconciliation €");
+    }
+
+    function appendAnomalySheets(runResult, prefix) {
+      var sheetPrefix = prefix ? prefix + " " : "";
+      var byOrder = function (a, b) { return SEV_ORDER[a.severity] - SEV_ORDER[b.severity]; };
+      var anom = runResult.anomalies.filter(function (a) { return a.severity !== "info"; })
+        .sort(byOrder).map(function (a) { return toRow(a, isValidated(a.id)); });
+      if (!anom.length) anom = [{ "Gravité": "✅ Aucune anomalie", "Détail": "Tout est réconcilié." }];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(anom),
+        sheetSafe(sheetPrefix + "Anomalies"));
+
+      var infos = runResult.anomalies.filter(function (a) {
+        return a.severity === "info" && !isValidated(a.id);
+      }).map(function (a) { return toRow(a, false); });
+      if (!infos.length) infos = [{ "Gravité": "—", "Détail": "Aucune info." }];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(infos),
+        sheetSafe(sheetPrefix + "Infos"));
+
+      var posRows = runResult.pos.map(function (px) {
+        return {
+          "Ticket No.": px.ticket_no, "Date": px.date, "Heure": px.hour, "Caissier": px.user,
+          "Ticket name": px.ticket_name, "Canal détecté": px.channel,
+          "Total": isNaN(px.total) ? "" : px.total, "Mode de paiement": px.payment_type,
+          "Statut": px.statut, "Anomalies détectées": px.anomalies,
+        };
+      });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(posRows),
+        sheetSafe(sheetPrefix ? sheetPrefix + "POS" : "POS annoté"));
+    }
+
+    appendAnomalySheets(state, "");
+
+    if (state.byDay && Object.keys(state.byDay).length > 1) {
+      Object.keys(state.byDay).sort().forEach(function (dk) {
+        var dayRun = state.byDay[dk];
+        var dayLabel = fmtDayShort(dk);
+        var dayCounts = countsForRun(dayRun);
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+          buildResumeRows(dayRun.summary, dayCounts, fmtDayLabel(dk))),
+          sheetSafe(dayLabel + " Résumé"));
+        var dayFin = adjustedFinFor(dayRun);
+        if (dayFin) {
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFinRows(dayFin)),
+            sheetSafe(dayLabel + " Réconcil"));
+        }
+        appendAnomalySheets(dayRun, dayLabel);
+      });
+    }
 
     var stamp = new Date().toISOString().slice(0, 16).replace(/[-T:]/g, "").slice(0, 13);
     XLSX.writeFile(wb, "reconciliation_chicknster_" + stamp + ".xlsx");
