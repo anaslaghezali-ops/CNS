@@ -637,6 +637,20 @@ ticket CB non rattaché avec ligne NAPS correspondante = sur place/emporter.
 
 ---
 
+### 2026-08-12 — Fix Glovo : mauvais paiement exige même montant + fenêtre 20 min
+
+**Problème** : commande Online 104 DH rattachée au ticket Cash 55 DH (anomalie paiement)
+alors que le ticket BT 115 DH était la bonne commande (4 min plus tard).
+
+**Cause** : phase 2 « mode incorrect » appariement sans exiger le montant — le ticket
+le plus proche en temps (mauvais montant) volait la commande.
+
+**Fix** : phase 2 exige W−AE = total POS · fenêtre après réception **10 → 20 min**.
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/reconcile.py`, `README.md`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

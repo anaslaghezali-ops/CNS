@@ -32,7 +32,7 @@ Redirection depuis la racine du dépôt : [`index.html`](index.html) → `docs/`
 | Fichier | Rôle | Clé de rapprochement avec le POS |
 |---------|------|----------------------------------|
 | **POS (Mahaal)** | Fichier maître : toutes les transactions caisse | — |
-| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W − col AE) · heure (≤ 10 min après réception) |
+| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W − col AE) · heure (≤ 20 min après réception) |
 | **NAPS (TPE)** | Relevé des paiements par carte | Date (col I) + montant (col N) → paiements `Credit card` |
 | **Site** | Commandes du site web | Identifiant (col A) = ticket name |
 
@@ -60,7 +60,7 @@ Redirection depuis la racine du dépôt : [`index.html`](index.html) → `docs/`
 - 🟠 **Écart de montant** (Glovo W−AE vs POS, Site, etc.)
 - 🟠 Ticket POS **non rattachable** à une source
 - 🟠 Journée **non couverte** par le relevé NAPS (décalage de télécollecte)
-- 🔵 Écart **agrégé** de paiement (Glovo) · **saisie tardive** (> 10 min)
+- 🔵 Écart **agrégé** de paiement (Glovo) · **saisie tardive** (> 20 min)
 
 ## Structure du projet
 

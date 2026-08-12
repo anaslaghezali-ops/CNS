@@ -97,7 +97,7 @@
   }
 
   var WINDOW_BEFORE_MIN = 1;
-  var WINDOW_AFTER_MIN = 10;
+  var WINDOW_AFTER_MIN = 20;
   var AMOUNT_TOL = 0.5;
 
   // ----------------------------------------------------------------------- //
@@ -826,8 +826,9 @@
     // Phase 1 : fenêtre proche, bon paiement, montant identique (obligatoire).
     assignGlobalList(delivered, matched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, true, false);
 
-    // Phase 2 : fenêtre proche, MAUVAIS paiement (montant identique privilégié).
-    assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, false, true).forEach(function (pr) {
+    // Phase 2 : fenêtre proche, MAUVAIS paiement — montant identique obligatoire
+    // (sinon un ticket Cash proche en temps « vole » la commande BT, ex. 55 DH vs 104 DH).
+    assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, true, false).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi], exp = GLOVO_PAYMENT_MAP[g.payment_type];
       anomalies.push(posAnomaly(p, { source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
@@ -844,7 +845,7 @@
       var g = delivered[pr.gi], p = pool[pr.pi];
       var delay = minutesBetween(p.datetime, g.received_at);
       anomalies.push(posAnomaly(p, { source: "Glovo", severity: "info",
-        type: "Saisie tardive (hors fenêtre 10 min)",
+        type: "Saisie tardive (hors fenêtre " + WINDOW_AFTER_MIN + " min)",
         detail: "Commande Glovo " + g.order_id + " (" + g.amount.toFixed(0) +
                 " DH) reçue à " + hhmm(g.received_at) + ", tapée au POS à " +
                 hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +

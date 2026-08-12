@@ -49,7 +49,7 @@ def _is_all_dinein_payments(raw: str) -> bool:
 # Fenêtre temporelle : le caissier tape la commande Glovo entre l'heure de
 # réception (possiblement à la minute exacte) et 10 min après au maximum.
 GLOVO_WINDOW_BEFORE_MIN = 1    # simple tolérance d'arrondi à la minute
-GLOVO_WINDOW_AFTER_MIN = 10    # maximum observé entre réception et saisie POS
+GLOVO_WINDOW_AFTER_MIN = 20    # maximum observé entre réception et saisie POS
 
 AMOUNT_TOLERANCE = 0.5  # écart de montant toléré (arrondis)
 
@@ -394,10 +394,23 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
     for gidx in remaining2:
         g = delivered.loc[gidx]
         lo, hi = g["received_at"] - before, g["received_at"] + after
-        best = _glovo_nearest(g, pool, used, lo, hi, payment=None, prefer_amount=True)
-        if best is not None:
-            p = pos_df.loc[best]
-            used.add(best)
+        exp = GLOVO_PAYMENT_MAP.get(g["payment_type"])
+        g_amount = g.get("amount")
+        best_idx, best_score = None, None
+        for idx, p in pool:
+            if idx in used or p["payment_type"] == exp:
+                continue
+            dt = p["datetime"]
+            if pd.isna(dt) or not (lo <= dt <= hi):
+                continue
+            if pd.isna(g_amount) or pd.isna(p["total"]) or abs(p["total"] - g_amount) > AMOUNT_TOLERANCE:
+                continue
+            gap = abs((dt - g["received_at"]).total_seconds()) / 60
+            if best_score is None or gap < best_score:
+                best_score, best_idx = gap, idx
+        if best_idx is not None:
+            p = pos_df.loc[best_idx]
+            used.add(best_idx)
             exp = GLOVO_PAYMENT_MAP.get(g["payment_type"])
             anomalies.append(_anomaly(
                 "Glovo", "haute", "Mode de paiement incorrect",
@@ -421,7 +434,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
             used.add(best)
             delay = (p["datetime"] - g["received_at"]).total_seconds() / 60
             anomalies.append(_anomaly(
-                "Glovo", "info", "Saisie tardive (hors fenêtre 10 min)",
+                f"Glovo", "info", f"Saisie tardive (hors fenêtre {GLOVO_WINDOW_AFTER_MIN} min)",
                 f"Commande Glovo {g['order_id']} ({g['amount']:.0f} DH) reçue à "
                 f"{g['received_at']:%H:%M}, tapée au POS à {p['datetime']:%H:%M} "
                 f"(ticket {p['ticket_name']}, {delay:+.0f} min) — présente mais tardive.",
