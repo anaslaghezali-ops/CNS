@@ -29,7 +29,7 @@ accessible à :
 | Fichier | Rôle | Clé de rapprochement avec le POS |
 |---------|------|----------------------------------|
 | **POS (Mahaal)** | Fichier maître : toutes les transactions caisse | — |
-| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W) · heure (≤ 10 min après réception) |
+| **Glovo** | Commandes de la marketplace Glovo | Ticket name `1-3 chiffres` · montant (col W − col AE) · heure (≤ 10 min après réception) |
 | **NAPS (TPE)** | Relevé des paiements par carte | Date (col I) + montant (col N) → paiements `Credit card` |
 | **Site** | Commandes du site web | Identifiant (col A) = ticket name |
 

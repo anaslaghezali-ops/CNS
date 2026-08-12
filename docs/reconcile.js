@@ -147,6 +147,13 @@
         received_at: toDate(r["Order received at"]),
         earnings: num(r["Estimated earnings"]),
         subtotal: num(r["Subtotal"]),
+        discount_funded: num(r["Discount Funded by you"]),
+        amount: (function () {
+          var sub = num(r["Subtotal"]);
+          if (isNaN(sub)) return NaN;
+          var disc = num(r["Discount Funded by you"]);
+          return sub - (isNaN(disc) ? 0 : disc);
+        })(),
       });
     });
     return out;
@@ -411,8 +418,8 @@
       var p = pool[i];
       if (!p.datetime || p.datetime < lo || p.datetime > hi) continue;
       if (payment != null && p.payment_type !== payment) continue;
-      var amountMatch = !isNaN(g.subtotal) && !isNaN(p.total) &&
-                        Math.abs(p.total - g.subtotal) <= AMOUNT_TOL;
+      var amountMatch = !isNaN(g.amount) && !isNaN(p.total) &&
+                        Math.abs(p.total - g.amount) <= AMOUNT_TOL;
       if (requireAmount && !amountMatch) continue;
       var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
       // Priorités : montant identique > ticket Glovo numéroté > proximité temps.
@@ -444,8 +451,8 @@
     var MIN = 60000;
 
     function amountMatch(g, p) {
-      return !isNaN(g.subtotal) && !isNaN(p.total) &&
-             Math.abs(p.total - g.subtotal) <= AMOUNT_TOL;
+      return !isNaN(g.amount) && !isNaN(p.total) &&
+             Math.abs(p.total - g.amount) <= AMOUNT_TOL;
     }
     function inWindow(g, p, beforeMin, afterMin) {
       if (!p.datetime || !g.received_at) return false;
@@ -489,7 +496,7 @@
       anomalies.push(anomaly({ source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
         detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ", " +
-                g.subtotal.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
+                g.amount.toFixed(0) + " DH) : attendu '" + exp + "' au POS, trouvé '" +
                 p.payment_type + "' (ticket " + (p.ticket_name || p.ticket_no) +
                 " à " + hhmm(p.datetime) + ").",
         ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
@@ -503,12 +510,12 @@
       var delay = minutesBetween(p.datetime, g.received_at);
       anomalies.push(anomaly({ source: "Glovo", severity: "info",
         type: "Saisie tardive (hors fenêtre 10 min)",
-        detail: "Commande Glovo " + g.order_id + " (" + g.subtotal.toFixed(0) +
+        detail: "Commande Glovo " + g.order_id + " (" + g.amount.toFixed(0) +
                 " DH) reçue à " + hhmm(g.received_at) + ", tapée au POS à " +
                 hhmm(p.datetime) + " (ticket " + (p.ticket_name || p.ticket_no) + ", " +
                 (delay >= 0 ? "+" : "") + delay.toFixed(0) + " min) — présente mais tardive.",
         ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: g.order_id,
-        amount_pos: p.total, amount_source: g.subtotal,
+        amount_pos: p.total, amount_source: g.amount,
         file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
 
@@ -560,7 +567,7 @@
                      pay: SITE_EXPECTED_PAYMENT, id: o.identifiant, o: o });
     });
     missingGlovo.forEach(function (g) {
-      demands.push({ src: "Glovo", ref: g.received_at, amount: g.subtotal,
+      demands.push({ src: "Glovo", ref: g.received_at, amount: g.amount,
                      pay: GLOVO_PAYMENT_MAP[g.payment_type], id: g.order_id, o: g });
     });
     // Appariement GLOBAL glouton (comme Glovo) : on classe toutes les paires
@@ -845,7 +852,7 @@
 
     var posGlovo = sumPos(CH_GLOVO), glovoW = 0;
     if (glovo) glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; })
-      .forEach(function (g) { if (!isNaN(g.subtotal)) glovoW += g.subtotal; });
+      .forEach(function (g) { if (!isNaN(g.amount)) glovoW += g.amount; });
 
     var posSite = sumPos(CH_SITE), siteL = 0;
     if (site) site.filter(function (o) { return (o.delivery_status || "").toUpperCase() === "DELIVERED"; })
@@ -855,7 +862,7 @@
     if (naps) lines.push({ source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
       pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC });
     if (glovo) lines.push({ source: "🛵 Glovo", pos_label: "POS tickets Glovo",
-      pos: posGlovo, src_label: "Glovo (col W)", src: glovoW, ecart: glovoW - posGlovo });
+      pos: posGlovo, src_label: "Glovo (W − AE)", src: glovoW, ecart: glovoW - posGlovo });
     if (site) lines.push({ source: "🌐 Site", pos_label: "POS tickets Site",
       pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite });
 
