@@ -307,6 +307,7 @@
              '<div class="bar-label">' + escapeHtml(k) + "</div></div>";
     }).join("");
 
+    renderPaymentBreakdown(vs.summary.financial);
     renderFinancial(getAdjustedFinancial());
     renderNapsBalanced();
 
@@ -334,6 +335,27 @@
   function fmtDH(v) {
     if (v == null || isNaN(v)) return "";
     return Math.round(v).toLocaleString("fr-FR") + " DH";
+  }
+
+  function renderPaymentBreakdown(fin) {
+    var el = document.getElementById("payment-breakdown");
+    if (!fin || !fin.payment_breakdown) {
+      el.innerHTML = "<p class='muted'>Aucune donnée POS.</p>";
+      return;
+    }
+    el.innerHTML = fin.payment_breakdown.payments.map(function (pay) {
+      var splits = pay.splits.map(function (sp) {
+        var cls = Math.round(sp.amount) === 0 ? " pay-split zero" : " pay-split";
+        return "<div class='" + cls + "'><span class='split-label'>" +
+          escapeHtml(sp.label) + "</span><span class='split-amt'>" +
+          fmtDH(sp.amount) + "</span></div>";
+      }).join("");
+      return '<div class="pay-card">' +
+        '<div class="pay-card-head">' +
+        "<span class='pay-name'>" + escapeHtml(pay.icon) + " " + escapeHtml(pay.label) + "</span>" +
+        "<span class='pay-total'>" + fmtDH(pay.total) + "</span>" +
+        "</div>" + splits + "</div>";
+    }).join("");
   }
 
   function renderFinancial(fin) {
@@ -740,6 +762,19 @@
       return frows;
     }
 
+    function buildPaymentBreakdownRows(runFin) {
+      if (!runFin || !runFin.payment_breakdown) return [];
+      var rows = [["Mode de paiement", "Montant (DH)"], []];
+      runFin.payment_breakdown.payments.forEach(function (pay) {
+        rows.push([pay.label, Math.round(pay.total)]);
+        pay.splits.forEach(function (sp) {
+          rows.push(["  " + sp.label, Math.round(sp.amount)]);
+        });
+        rows.push([]);
+      });
+      return rows;
+    }
+
     function toRow(a, validated) {
       return {
         "Validée": validated ? "Oui" : "Non",
@@ -763,6 +798,10 @@
 
     if (fin) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFinRows(fin)), "Réconciliation €");
+      if (fin.payment_breakdown) {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+          buildPaymentBreakdownRows(fin)), "Totaux paiement");
+      }
     }
 
     function appendAnomalySheets(runResult, prefix) {
@@ -807,6 +846,10 @@
         if (dayFin) {
           XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildFinRows(dayFin)),
             sheetSafe(dayLabel + " Réconcil"));
+          if (dayFin.payment_breakdown) {
+            XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(
+              buildPaymentBreakdownRows(dayFin)), sheetSafe(dayLabel + " Paiements"));
+          }
         }
         appendAnomalySheets(dayRun, dayLabel);
       });

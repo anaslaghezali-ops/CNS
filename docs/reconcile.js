@@ -1561,7 +1561,68 @@
       ecart: siteL - posSite,
     });
 
-    return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines };
+    var payment_breakdown = buildPaymentBreakdown(byPayment, matrix);
+
+    return { pays: PAYS, by_payment: byPayment, matrix: matrix, lines: lines,
+             payment_breakdown: payment_breakdown };
+  }
+
+  /** Totaux POS par mode de paiement avec split canal (Glovo / SP&EMP / Site). */
+  function buildPaymentBreakdown(byPayment, matrix) {
+    function cell(channel, pay) {
+      var ch = matrix[channel];
+      if (!ch) return 0;
+      return ch[pay] || 0;
+    }
+    function otherChannelsSum(pay, exclude) {
+      var s = 0;
+      Object.keys(matrix).forEach(function (ch) {
+        if (exclude.indexOf(ch) >= 0) return;
+        s += cell(ch, pay);
+      });
+      return s;
+    }
+
+    var cashKnown = [CH_GLOVO, CH_DINEIN, CH_SITE];
+    var cashSplits = [
+      { key: "glovo", label: "Glovo", amount: cell(CH_GLOVO, "Cash") },
+      { key: "spemp", label: "SP&EMP", amount: cell(CH_DINEIN, "Cash") },
+      { key: "site", label: "Site", amount: cell(CH_SITE, "Cash") },
+    ];
+    var cashOther = otherChannelsSum("Cash", cashKnown);
+    if (Math.round(cashOther) !== 0) {
+      cashSplits.push({ key: "autre", label: "Autre", amount: cashOther });
+    }
+
+    var ccKnown = [CH_DINEIN, CH_SITE];
+    var ccSplits = [
+      { key: "spemp", label: "SP&EMP", amount: cell(CH_DINEIN, "Credit card") },
+      { key: "site", label: "Site", amount: cell(CH_SITE, "Credit card") },
+    ];
+    var ccOther = otherChannelsSum("Credit card", ccKnown);
+    if (Math.round(ccOther) !== 0) {
+      ccSplits.push({ key: "autre", label: "Autre", amount: ccOther });
+    }
+
+    var btKnown = [CH_GLOVO, CH_SITE];
+    var btSplits = [
+      { key: "glovo", label: "Glovo", amount: cell(CH_GLOVO, "Bank Transfer") },
+      { key: "site", label: "Site", amount: cell(CH_SITE, "Bank Transfer") },
+    ];
+    var btOther = otherChannelsSum("Bank Transfer", btKnown);
+    if (Math.round(btOther) !== 0) {
+      btSplits.push({ key: "autre", label: "Autre", amount: btOther });
+    }
+
+    return {
+      payments: [
+        { key: "Cash", label: "Cash", icon: "💵", total: byPayment["Cash"] || 0, splits: cashSplits },
+        { key: "Credit card", label: "CB (Credit card)", icon: "💳",
+          total: byPayment["Credit card"] || 0, splits: ccSplits },
+        { key: "Bank Transfer", label: "Bank Transfer", icon: "🏦",
+          total: byPayment["Bank Transfer"] || 0, splits: btSplits },
+      ],
+    };
   }
 
   // Ajustements financiers pour anomalies validées (hors calcul d'écart).
@@ -1695,7 +1756,8 @@
       };
     });
     return { pays: fin.pays, by_payment: fin.by_payment, matrix: fin.matrix,
-             lines: lines, adjustments_applied: true };
+             lines: lines, adjustments_applied: true,
+             payment_breakdown: fin.payment_breakdown };
   }
 
   function annotate(pos, anomalies) {

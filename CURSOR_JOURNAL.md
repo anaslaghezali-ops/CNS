@@ -465,6 +465,20 @@ une section verte **✅ TPE — Totaux alignés** avec le détail des deux côt�
 
 ---
 
+### 2026-08-12 — Totaux POS par mode de paiement (split canal)
+
+**Demandé par** : gérant — vue synthétique des totaux POS Cash / CB / Bank Transfer
+avec ventilation par canal sous chaque mode :
+- Cash → Glovo · SP&EMP · Site
+- CB → SP&EMP · Site
+- Bank Transfer → Glovo · Site
+
+**UI** : cartes sous la vue d'ensemble + export Excel (`Totaux paiement` / `JJ/MM Paiements`).
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`, `docs/style.css`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

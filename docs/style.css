@@ -162,4 +162,26 @@ tbody tr:hover { background: #fbfbfb; }
   background: #d4edda; color: #1e6b45; border: 1px solid #a8d5c2; font-weight: 600;
 }
 
+.payment-breakdown {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px; margin: 8px 0 20px;
+}
+.pay-card {
+  border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+.pay-card-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 8px; padding-bottom: 10px; border-bottom: 2px solid var(--red);
+  margin-bottom: 10px;
+}
+.pay-card-head .pay-name { font-weight: 700; font-size: 1rem; }
+.pay-card-head .pay-total { font-weight: 800; font-size: 1.15rem; color: var(--red); }
+.pay-split { display: flex; justify-content: space-between; gap: 12px;
+  padding: 5px 0; font-size: .9rem; border-bottom: 1px dashed #eee; }
+.pay-split:last-child { border-bottom: none; }
+.pay-split .split-label { color: #555; }
+.pay-split .split-amt { font-weight: 600; text-align: right; }
+.pay-split.zero { opacity: .45; }
+
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }
