@@ -13,6 +13,9 @@
   var MONTHS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin",
                    "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 
+  var buildEl = document.getElementById("build");
+  if (buildEl) buildEl.textContent = CNS.BUILD || "?";
+
   // ---- Sélection de fichiers -------------------------------------------- //
   document.querySelectorAll(".drop").forEach(function (drop) {
     var key = drop.getAttribute("data-key");

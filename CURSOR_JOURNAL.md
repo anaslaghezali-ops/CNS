@@ -811,6 +811,31 @@ Non-régression vérifiée sur POS+NAPS+Site réels (174 anomalies, 0 fusion par
 
 ---
 
+### 2026-08-12 — Rapprochement tolérant + version affichée
+
+**Problème** : le gérant voyait toujours « Commande Glovo absente du POS » (101718699078)
++ « Mode de paiement inattendu » (Sp235). L'absence de **suggestion** dans le détail
+prouvait que l'écart de montant réel dépassait la tolérance (0,5 puis 1 DH), les deux
+montants étant pourtant affichés « 190 DH » (arrondi à l'entier partout dans l'UI).
+
+**Règles** :
+- Passe finale : un ticket **Bank Transfer** hors canal Glovo/Site (sur place, emporter,
+  sans numéro) ne peut venir que d'une commande Glovo/Site ⇒ le montant peut être
+  **approché** (≤ 30 %) au lieu d'exact ; le détail affiche alors les deux montants
+  au centime et l'écart. Idem si les produits sont ≥ 30 % compatibles.
+- Le coût d'appariement pénalise l'écart de montant (`+ diff * 5`) : un montant exact
+  gagne toujours contre un montant approché.
+- Anomalie « absente du POS » sans candidat : **diagnostic** avec le ticket le plus
+  proche au bon mode de paiement et les montants **exacts au centime** (« 190,00 DH au
+  POS vs 189,00 DH côté Glovo, écart 1,00 DH »).
+
+**Cache navigateur** : `?v=20260812-5` sur `reconcile.js` / `app.js` / `style.css` et
+**version affichée en pied de page** (`CNS.BUILD`) pour vérifier le code réellement chargé.
+
+**Fichiers** : `docs/reconcile.js`, `docs/app.js`, `docs/index.html`
+
+---
+
 ## Template pour les prochaines entrées
 
 ```markdown

@@ -7,6 +7,9 @@
 (function (root) {
   "use strict";
 
+  /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
+  var BUILD = "2026-08-12 · 5";
+
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
   // ----------------------------------------------------------------------- //
@@ -1523,20 +1526,40 @@
             ", +" + bestAmtGap.toFixed(0) + " min) : numéro de ticket probablement mal saisi]";
           return;
         }
-        if (!g.order_items) return;
-        var bestP = null, bestScore = 0;
+        if (g.order_items) {
+          var bestP = null, bestScore = 0;
+          pos.forEach(function (px) {
+            if (px.channel !== CH_GLOVO || !px.datetime || !px.designations) return;
+            var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
+            if (gap > MAX_LATE_ENTRY_MIN) return;
+            var sc = productSimilarity(px.designations, g.order_items);
+            if (sc > bestScore) { bestScore = sc; bestP = px; }
+          });
+          if (bestP && bestScore >= 0.35) {
+            var sugTime = bestP.datetime ? " à " + hhmm(bestP.datetime) : "";
+            a.detail += " [Suggestion : ticket " + bestP.ticket_name + " ligne " + bestP.row +
+                        sugTime + " — produits ~" + Math.round(bestScore * 100) +
+                        " % compatibles, à vérifier]";
+            return;
+          }
+        }
+        // Diagnostic : ticket le plus proche au mode de paiement attendu, avec les
+        // montants EXACTS (centimes) pour comprendre pourquoi il n'est pas apparié.
+        var near = null, nearGap = 1e9;
         pos.forEach(function (px) {
-          if (px.channel !== CH_GLOVO || !px.datetime || !px.designations) return;
+          if (px.matched_glovo_order || !px.datetime || isNaN(px.total)) return;
+          if (px.payment_type !== expPay) return;
           var gap = Math.abs(minutesBetween(px.datetime, g.received_at));
           if (gap > MAX_LATE_ENTRY_MIN) return;
-          var sc = productSimilarity(px.designations, g.order_items);
-          if (sc > bestScore) { bestScore = sc; bestP = px; }
+          if (gap < nearGap) { nearGap = gap; near = px; }
         });
-        if (bestP && bestScore >= 0.35) {
-          var sugTime = bestP.datetime ? " à " + hhmm(bestP.datetime) : "";
-          a.detail += " [Suggestion : ticket " + bestP.ticket_name + " ligne " + bestP.row +
-                      sugTime + " — produits ~" + Math.round(bestScore * 100) +
-                      " % compatibles, à vérifier]";
+        if (near) {
+          a.detail += " [Ticket le plus proche au mode '" + expPay + "' : « " +
+            (near.ticket_name || near.ticket_no) + " » ligne " + near.row + " à " +
+            hhmm(near.datetime) + " (+" + nearGap.toFixed(0) + " min) — " +
+            near.total.toFixed(2) + " DH au POS vs " + g.amount.toFixed(2) +
+            " DH côté Glovo (écart " + Math.abs(near.total - g.amount).toFixed(2) +
+            " DH) : non apparié à cause de l'écart de montant]";
         }
       }
     });
@@ -1591,8 +1614,7 @@
 
       posAnoms.forEach(function (pa) {
         var p = findPosByTicketNo(pos, pa.pos_ticket_no);
-        if (!p || p.matched_glovo_order || !p.datetime) return;
-        if (!sameAmountRounded(p.total, srcAmt)) return;
+        if (!p || p.matched_glovo_order || !p.datetime || isNaN(p.total)) return;
         var gap = Math.abs(minutesBetween(p.datetime, srcWhen));
         if (gap > MAX_LATE_ENTRY_MIN) return;
         var samePay = isGlovo
@@ -1601,12 +1623,22 @@
                                    : p.payment_type === SITE_EXPECTED_PAYMENT);
         var sim = (srcItems && p.designations)
           ? productSimilarity(p.designations, srcItems) : 0;
+        var diff = Math.abs(p.total - srcAmt);
+        var sameAmount = sameAmountRounded(p.total, srcAmt);
+        // « Bank Transfer » sur un ticket sur place/emporter ou sans numéro ne peut
+        // venir que d'une commande Glovo/Site : le montant peut alors être approché.
+        var btOnCounterTicket = p.payment_type === "Bank Transfer" &&
+          p.channel !== CH_GLOVO && p.channel !== CH_SITE;
+        var amountOk = sameAmount ||
+          ((btOnCounterTicket || sim >= LINK_MIN_PRODUCT_SIM) &&
+           diff <= Math.max(srcAmt * AMOUNT_MISMATCH_MAX_RATIO, 30));
+        if (!amountOk) return;
         if (!samePay && sim < LINK_MIN_PRODUCT_SIM) return;
         pairs.push({
           oa: oa, pa: pa, p: p, g: g, o: o, isGlovo: isGlovo, gap: gap,
           samePay: samePay, sim: sim, expPay: expPay, srcAmt: srcAmt,
-          srcWhen: srcWhen,
-          cost: gap - (samePay ? 30 : 0) - sim * 20,
+          srcWhen: srcWhen, sameAmount: sameAmount, diff: diff,
+          cost: gap - (samePay ? 30 : 0) - sim * 20 + diff * 5,
         });
       });
     });
@@ -1629,7 +1661,10 @@
       p.channel = pr.isGlovo ? CH_GLOVO : CH_SITE;
       p.channel_match = pr.isGlovo ? "glovo_wrong_name" : "site_wrong_name";
 
-      var proofs = ["même montant (" + pr.srcAmt.toFixed(0) + " DH)",
+      var proofs = [pr.sameAmount
+        ? "même montant (" + pr.srcAmt.toFixed(2) + " DH)"
+        : "montants proches (" + p.total.toFixed(2) + " DH au POS vs " +
+          pr.srcAmt.toFixed(2) + " DH côté " + src + ", écart " + pr.diff.toFixed(2) + " DH)",
                     pr.gap.toFixed(0) + " min d'écart"];
       if (pr.samePay) proofs.push("mode de paiement attendu (" + p.payment_type + ")");
       if (pr.sim >= 0.2) proofs.push("produits ~" + Math.round(pr.sim * 100) + " % compatibles");
@@ -3054,6 +3089,7 @@
     listPosUsers: listPosUsers,
     listPosUsersWithActivity: listPosUsersWithActivity,
     CASH_COLLECT_UNATTRIBUTED: CASH_COLLECT_UNATTRIBUTED,
+    BUILD: BUILD,
     getFinancialContributors: getFinancialContributors,
     ecartContributionForAnomaly: ecartContributionForAnomaly,
     sumFinancialContributions: sumFinancialContributions,
