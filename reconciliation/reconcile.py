@@ -310,7 +310,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
             continue
         lo, hi = g["received_at"] - before, g["received_at"] + after
         best = _glovo_nearest(g, pool, used, lo, hi,
-                              payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), prefer_amount=True)
+                              payment=GLOVO_PAYMENT_MAP.get(g["payment_type"]), require_amount=True)
         if best is not None:
             used.add(best)
         else:
@@ -336,6 +336,7 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
         else:
             remaining3.append(gidx)
 
+    amount_mismatch_pending = []
     for gidx in remaining3:
         g = delivered.loc[gidx]
         lo, hi = g["received_at"] - wide, g["received_at"] + wide
@@ -354,7 +355,51 @@ def reconcile_glovo(pos_df: pd.DataFrame, glovo_df: pd.DataFrame):
                    "amount_pos": p["total"], "amount_source": g["amount"]},
             ))
         else:
-            missing.append(g)  # -> passe commune (ticket sans numéro) puis « absente »
+            amount_mismatch_pending.append(gidx)
+
+    # Bon paiement + fenêtre proche, montant différent (ex. subtotal W tapé sans AE).
+    still_missing_idx = []
+    for gidx in amount_mismatch_pending:
+        g = delivered.loc[gidx]
+        lo, hi = g["received_at"] - before, g["received_at"] + after
+        exp = GLOVO_PAYMENT_MAP.get(g["payment_type"])
+        g_amount = g.get("amount")
+        best_idx, best_score = None, None
+        for idx, p in pool:
+            if idx in used or p["payment_type"] != exp:
+                continue
+            dt = p["datetime"]
+            if pd.isna(dt) or not (lo <= dt <= hi):
+                continue
+            if pd.notna(g_amount) and pd.notna(p["total"]) and abs(p["total"] - g_amount) <= AMOUNT_TOLERANCE:
+                continue
+            gap = abs((dt - g["received_at"]).total_seconds()) / 60
+            tap_brut = (pd.notna(g.get("subtotal")) and abs(p["total"] - g["subtotal"]) <= AMOUNT_TOLERANCE)
+            score = gap + (0 if tap_brut else 0.5)
+            if best_score is None or score < best_score:
+                best_score, best_idx = score, idx
+        if best_idx is not None:
+            used.add(best_idx)
+            p = pos_df.loc[best_idx]
+            note = ""
+            if pd.notna(g.get("subtotal")) and abs(p["total"] - g["subtotal"]) <= AMOUNT_TOLERANCE \
+               and pd.notna(g.get("discount_funded")) and g["discount_funded"] > 0:
+                note = (f" Le POS a probablement le subtotal brut (W={g['subtotal']:.0f} DH) "
+                        f"sans déduire la remise AE (−{g['discount_funded']:.0f} DH).")
+            anomalies.append(_anomaly(
+                "Glovo", "moyenne", "Écart de montant",
+                f"Commande Glovo {g['order_id']} ({g['payment_type']}) : "
+                f"{g['amount']:.0f} DH (W−AE) vs {p['total']:.0f} DH au POS "
+                f"(ticket {p['ticket_name']} à {p['datetime']:%H:%M}).{note}",
+                **{**_pos_ticket_kw(p), "source_ref": str(g["order_id"]),
+                   "amount_pos": p["total"], "amount_source": g["amount"],
+                   "payment_pos": p["payment_type"], "payment_source": exp},
+            ))
+        else:
+            still_missing_idx.append(gidx)
+
+    for gidx in still_missing_idx:
+        missing.append(delivered.loc[gidx])  # -> passe commune puis « absente »
 
     # Commandes ANNULÉES : si tapées au POS avant annulation, rapprocher (pas une orpheline).
     cancelled = glovo_df[glovo_df["status"].str.lower() == "cancelled"].copy()

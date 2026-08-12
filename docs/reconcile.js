@@ -571,6 +571,51 @@
         payment_source: GLOVO_PAYMENT_MAP[g.payment_type] }));
     });
 
+    // Phase 5 : bon paiement + fenêtre, montant différent (ex. subtotal W tapé au POS
+    // sans déduire la remise AE — W−AE attendu au POS).
+    function assignAmountMismatch(list, matchSet, beforeMin, afterMin) {
+      var pairs = [];
+      list.forEach(function (g, gi) {
+        if (matchSet.has(gi) || !g.received_at) return;
+        var exp = GLOVO_PAYMENT_MAP[g.payment_type];
+        pool.forEach(function (p, pi) {
+          if (used.has(pi) || p.payment_type !== exp) return;
+          if (!inWindow(g, p, beforeMin, afterMin)) return;
+          if (amountMatch(g, p)) return;
+          if (isNaN(g.amount) || isNaN(p.total)) return;
+          var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
+          var tapBrut = !isNaN(g.subtotal) && Math.abs(p.total - g.subtotal) <= AMOUNT_TOL;
+          pairs.push({ gi: gi, pi: pi, cost: gap + (tapBrut ? 0 : 0.5) });
+        });
+      });
+      pairs.sort(function (a, b) { return a.cost - b.cost; });
+      var res = [];
+      pairs.forEach(function (pr) {
+        if (matchSet.has(pr.gi) || used.has(pr.pi)) return;
+        matchSet.add(pr.gi); used.add(pr.pi); res.push(pr);
+      });
+      return res;
+    }
+    assignAmountMismatch(delivered, matched, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN).forEach(function (pr) {
+      var g = delivered[pr.gi], p = pool[pr.pi];
+      var note = "";
+      if (!isNaN(g.subtotal) && Math.abs(p.total - g.subtotal) <= AMOUNT_TOL &&
+          !isNaN(g.discount_funded) && g.discount_funded > 0) {
+        note = " Le POS a probablement le subtotal brut (W=" + g.subtotal.toFixed(0) +
+               " DH) sans déduire la remise AE (−" + g.discount_funded.toFixed(0) + " DH).";
+      }
+      anomalies.push(posAnomaly(p, { source: "Glovo", severity: "moyenne",
+        type: "Écart de montant",
+        detail: "Commande Glovo " + g.order_id + " (" + g.payment_type + ") : " +
+                g.amount.toFixed(0) + " DH (W−AE) vs " + p.total.toFixed(0) +
+                " DH au POS (ticket " + (p.ticket_name || p.ticket_no) + " à " +
+                hhmm(p.datetime) + ")." + note,
+        source_ref: g.order_id,
+        amount_pos: p.total, amount_source: g.amount,
+        payment_pos: p.payment_type,
+        payment_source: GLOVO_PAYMENT_MAP[g.payment_type] }));
+    });
+
     // Commandes livrées non appariées -> passe commune puis « absente ».
     delivered.forEach(function (g, gi) {
       if (matched.has(gi)) return;
@@ -1000,6 +1045,14 @@
     } else if (t === "Écart de montant" && a.source === "Site") {
       adj.site_src -= as;
       adj.site_pos -= ap;
+    } else if (t === "Écart de montant" && a.source === "Glovo") {
+      if (a.payment_source === "Cash") {
+        adj.glovo_src_cash -= as;
+        adj.glovo_pos_cash -= ap;
+      } else {
+        adj.glovo_src_online -= as;
+        adj.glovo_pos_bt -= ap;
+      }
     } else if (t === "Ticket en double (correction)") {
       if (a.source === "Glovo") {
         if (a.payment_pos === "Cash") adj.glovo_pos_cash -= ap;

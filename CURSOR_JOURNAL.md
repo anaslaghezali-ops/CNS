@@ -264,6 +264,23 @@ le reste (cash sur place, enveloppes caissiers) est vérifié **manuellement**.
 
 ---
 
+### 2026-08-12 — Glovo « absente » alors que ticket POS existe (écart W vs W−AE)
+
+**Cas** : commande `101735404708` (ligne **87** du fichier Glovo) — Online 275 DH
+(W−AE), 06/08 15:04 — signalée absente du POS.
+
+**Cause** : pas la ligne POS 622 (ticket **365**, 95 DH → autre commande Glovo
+`101735406241`). La commande 275 DH est sur la ligne POS **623** : ticket **80**,
+300 DH, 15:04 — le caissier a tapé le **subtotal brut (W)** sans déduire la remise
+AE (−25 DH). L’outil exige W−AE au POS → fausse « absente » + fausse orpheline.
+
+**Correctif** : nouvelle passe Glovo « Écart de montant » (paiement + fenêtre OK,
+montant différent) avec note si POS = W brut.
+
+**Fichiers** : `docs/reconcile.js`, `reconciliation/reconcile.py`
+
+---
+
 ## Points métier encore ouverts (session analyse 12 août)
 
 Analyse sur fichiers réels (non versionnés) — pour référence future :
