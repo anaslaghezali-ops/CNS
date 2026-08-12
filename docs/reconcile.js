@@ -471,12 +471,11 @@
       return p.datetime >= new Date(g.received_at.getTime() - beforeMin * MIN) &&
              p.datetime <= new Date(g.received_at.getTime() + afterMin * MIN);
     }
-    // Appariement GLOBAL glouton : on classe toutes les paires (commande, ticket)
-    // éligibles par proximité temporelle croissante et on apparie les plus proches
-    // d'abord — une commande ne peut plus « voler » le ticket d'une autre plus
-    // proche. Le montant sert seulement de léger départage (il n'est pas fiable :
-    // le POS colle tantôt au montant brut W, tantôt au net AP).
-    function assignGlobalList(list, matchSet, payFilter, beforeMin, afterMin) {
+    // Appariement GLOBAL glouton : paires éligibles classées par score (temps +
+    // montant). Phase 1 EXIGE le même montant (W−AE) — sinon un ticket proche en
+    // temps mais mauvais montant « vole » la commande (ex. 725/120 DH vs 658/199 DH).
+    function assignGlobalList(list, matchSet, payFilter, beforeMin, afterMin,
+                              requireAmount, preferAmount) {
       var pairs = [];
       list.forEach(function (g, gi) {
         if (matchSet.has(gi) || !g.received_at) return;
@@ -484,8 +483,11 @@
         pool.forEach(function (p, pi) {
           if (used.has(pi) || !payFilter(p.payment_type, exp)) return;
           if (!inWindow(g, p, beforeMin, afterMin)) return;
+          var am = amountMatch(g, p);
+          if (requireAmount && !am) return;
           var gap = Math.abs(minutesBetween(p.datetime, g.received_at));
-          pairs.push({ gi: gi, pi: pi, cost: gap - (amountMatch(g, p) ? 0.4 : 0) });
+          var score = gap + (preferAmount && !am ? 100000 : 0) - (am ? 0.4 : 0);
+          pairs.push({ gi: gi, pi: pi, cost: score });
         });
       });
       pairs.sort(function (a, b) { return a.cost - b.cost; });
@@ -499,11 +501,11 @@
     var isExp = function (pt, exp) { return pt === exp; };
     var isWrong = function (pt, exp) { return pt !== exp; };
 
-    // Phase 1 : fenêtre proche, BON mode de paiement (livrées).
-    assignGlobalList(delivered, matched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
+    // Phase 1 : fenêtre proche, bon paiement, montant identique (obligatoire).
+    assignGlobalList(delivered, matched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, true, false);
 
-    // Phase 2 : fenêtre proche, MAUVAIS mode de paiement -> erreur de paiement.
-    assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN).forEach(function (pr) {
+    // Phase 2 : fenêtre proche, MAUVAIS paiement (montant identique privilégié).
+    assignGlobalList(delivered, matched, isWrong, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, false, true).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi], exp = GLOVO_PAYMENT_MAP[g.payment_type];
       anomalies.push(anomaly({ source: "Glovo", severity: "haute",
         type: "Mode de paiement incorrect",
@@ -516,8 +518,8 @@
         file: "POS", row: p.row, when: dtFull(p.datetime) }));
     });
 
-    // Phase 3 : saisie tardive (fenêtre élargie ±120 min, bon mode de paiement).
-    assignGlobalList(delivered, matched, isExp, 120, 120).forEach(function (pr) {
+    // Phase 3 : saisie tardive (±120 min, bon paiement, montant identique).
+    assignGlobalList(delivered, matched, isExp, 120, 120, true, false).forEach(function (pr) {
       var g = delivered[pr.gi], p = pool[pr.pi];
       var delay = minutesBetween(p.datetime, g.received_at);
       anomalies.push(anomaly({ source: "Glovo", severity: "info",
@@ -539,8 +541,8 @@
              (b.received_at ? b.received_at.getTime() : 0);
     });
     var cancelledMatched = new Set();
-    assignGlobalList(cancelled, cancelledMatched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN);
-    assignGlobalList(cancelled, cancelledMatched, isExp, 120, 120).forEach(function (pr) {
+    assignGlobalList(cancelled, cancelledMatched, isExp, WINDOW_BEFORE_MIN, WINDOW_AFTER_MIN, true, false);
+    assignGlobalList(cancelled, cancelledMatched, isExp, 120, 120, true, false).forEach(function (pr) {
       var g = cancelled[pr.gi], p = pool[pr.pi];
       g.matched_pos = true;
       var delay = minutesBetween(p.datetime, g.received_at);
