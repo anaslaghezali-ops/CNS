@@ -1620,6 +1620,11 @@
         return a + (alloc[pay] || 0);
       }, 0);
     }
+    function sumPosGlovoTicketTotals() {
+      return pos.reduce(function (a, p) {
+        return a + (p.channel === CH_GLOVO && !isNaN(p.total) ? p.total : 0);
+      }, 0);
+    }
     function sumGlovoAmount(pay) {
       if (!glovo) return 0;
       return glovo.reduce(function (a, g) {
@@ -1638,7 +1643,7 @@
     if (naps) naps.forEach(function (n) {
       if (posDates.has(n.date) && !isNaN(n.montant)) napsTotal += n.montant; });
 
-    var posGlovo = sumPos(CH_GLOVO), glovoW = 0;
+    var posGlovoTickets = sumPosGlovoTicketTotals(), glovoW = 0;
     if (glovo) glovo.forEach(function (g) {
       var st = (g.status || "").toLowerCase();
       if (isNaN(g.amount)) return;
@@ -1657,8 +1662,19 @@
     if (glovo) {
       var posGlovoBT = sumPosGlovoPay("Bank Transfer");
       var posGlovoCash = sumPosGlovoPay("Cash");
+      var posGlovoCC = sumPosGlovoPay("Credit card");
+      var posGlovoAutre = sumPosGlovoPay("Autre");
+      // Total POS réconcilié = Online (BT) + Cash — doit égaler les deux lignes ci-dessus.
+      var posGlovoFin = posGlovoBT + posGlovoCash;
       var glovoOnline = sumGlovoAmount("Online");
       var glovoCash = sumGlovoAmount("Cash");
+      var totalNote = "Côté POS : Total = Online (Bank Transfer) + Cash.";
+      if (posGlovoCC >= 1) {
+        totalNote += " CB Glovo au POS : " + Math.round(posGlovoCC) + " DH (hors Online/Cash).";
+      }
+      if (posGlovoAutre >= 1) {
+        totalNote += " Autre paiement Glovo : " + Math.round(posGlovoAutre) + " DH.";
+      }
       lines.push({
         lineKey: "glovo_online", source: "🛵 Glovo — Online",
         pos_label: "POS Glovo « Bank Transfer »",
@@ -1673,10 +1689,10 @@
       });
       lines.push({
         lineKey: "glovo_total", source: "🛵 Glovo — Total",
-        pos_label: "POS tickets Glovo (tous paiements)",
-        pos: posGlovo, src_label: "Glovo livrées (W − AE)", src: glovoW,
-        ecart: glovoW - posGlovo, group: "glovo", isTotal: true,
-        note: "Écart total = Online + Cash (voir lignes ci-dessus pour le détail).",
+        pos_label: "POS Glovo Online + Cash",
+        pos: posGlovoFin, src_label: "Glovo livrées (W − AE)", src: glovoW,
+        ecart: glovoW - posGlovoFin, group: "glovo", isTotal: true,
+        note: totalNote,
       });
     }
     if (site) lines.push({
