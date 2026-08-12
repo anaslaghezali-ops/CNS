@@ -843,12 +843,9 @@
     if (naps) naps.forEach(function (n) {
       if (posDates.has(n.date) && !isNaN(n.montant)) napsTotal += n.montant; });
 
-    var posGlovo = sumPos(CH_GLOVO), glovoW = 0, glovoAP = 0;
+    var posGlovo = sumPos(CH_GLOVO), glovoW = 0;
     if (glovo) glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; })
-      .forEach(function (g) {
-        if (!isNaN(g.subtotal)) glovoW += g.subtotal;
-        if (!isNaN(g.earnings)) glovoAP += g.earnings;
-      });
+      .forEach(function (g) { if (!isNaN(g.subtotal)) glovoW += g.subtotal; });
 
     var posSite = sumPos(CH_SITE), siteL = 0;
     if (site) site.filter(function (o) { return (o.delivery_status || "").toUpperCase() === "DELIVERED"; })
@@ -858,8 +855,7 @@
     if (naps) lines.push({ source: "💳 TPE (NAPS)", pos_label: "POS « Credit card »",
       pos: posCC, src_label: "Relevé NAPS", src: napsTotal, ecart: napsTotal - posCC });
     if (glovo) lines.push({ source: "🛵 Glovo", pos_label: "POS tickets Glovo",
-      pos: posGlovo, src_label: "Glovo brut (col W)", src: glovoW, ecart: glovoW - posGlovo,
-      note: "Réf. net Glovo (AP, après commission) : " + glovoAP.toFixed(0) + " DH." });
+      pos: posGlovo, src_label: "Glovo (col W)", src: glovoW, ecart: glovoW - posGlovo });
     if (site) lines.push({ source: "🌐 Site", pos_label: "POS tickets Site",
       pos: posSite, src_label: "Site livrées (col L)", src: siteL, ecart: siteL - posSite });
 
