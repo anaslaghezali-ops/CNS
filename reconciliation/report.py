@@ -67,6 +67,8 @@ def _summary_dataframe(summary: dict) -> pd.DataFrame:
         ("  dont gravité haute", summary["severity"].get("haute", 0)),
         ("  dont gravité moyenne", summary["severity"].get("moyenne", 0)),
         ("Infos (rattachements & notes)", summary.get("n_infos", summary["severity"].get("info", 0))),
+        ("Bank Transfer hors Site/Glovo (tickets)", len(summary.get("bt_outside", []))),
+        ("Bank Transfer hors Site/Glovo (DH)", round(summary.get("bt_outside_total", 0), 2)),
         ("", ""),
     ]
     for channel, n in summary["channels"].items():
@@ -105,12 +107,22 @@ def build_excel_report(anomalies, pos_annotated, summary) -> bytes:
     df_anom = _anomalies_dataframe(real, "Aucune anomalie — tout est réconcilié.")
     df_infos = _anomalies_dataframe(infos, "Aucune info.")
     df_pos = _pos_export_dataframe(pos_annotated)
+    bt = summary.get("bt_outside")
+    if bt is not None and len(bt):
+        df_bt = _pos_export_dataframe(bt)
+        df_bt = pd.concat([df_bt, pd.DataFrame([{"Ticket name": "TOTAL",
+                                                  "Total": summary["bt_outside_total"]}])],
+                          ignore_index=True)
+    else:
+        df_bt = pd.DataFrame([{"Ticket name": "✅ Aucun Bank Transfer hors Site/Glovo."}])
 
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_summary.to_excel(writer, sheet_name="Résumé", index=False)
         df_anom.to_excel(writer, sheet_name="Anomalies", index=False)
         df_infos.to_excel(writer, sheet_name="Infos", index=False)
+        df_bt.to_excel(writer, sheet_name="Bank Transfer hors Site-Glovo", index=False)
         df_pos.to_excel(writer, sheet_name="POS annoté", index=False)
+        _style_sheet(writer.sheets["Bank Transfer hors Site-Glovo"], df_bt)
 
         _style_sheet(writer.sheets["Résumé"], df_summary)
         _style_anomalies(writer.sheets["Anomalies"], df_anom)

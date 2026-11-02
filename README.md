@@ -53,6 +53,9 @@ accessible à :
 
 - 🔴 Commande **livrée absente** du POS (non tapée)
 - 🔴 **Mauvais mode de paiement** au POS
+- 🔴 **Bank Transfer hors Site/Glovo** : ticket payé en Bank Transfer qui n'est
+  rattaché à aucune commande Site ni Glovo (listé dans une section et une
+  feuille Excel dédiées)
 - 🟠 **Numéro de commande mal saisi** (faute de frappe sur le n° de ticket)
 - 🟠 **Écart de montant**
 - 🟠 Ticket POS **non rattachable** à une source

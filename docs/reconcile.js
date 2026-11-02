@@ -20,6 +20,7 @@
   var SITE_EXPECTED_PAYMENT = "Bank Transfer";
   var DINEIN_ALLOWED = ["Cash", "Credit card"];
 
+  var BT = "Bank Transfer";
   var WINDOW_BEFORE_MIN = 1;
   var WINDOW_AFTER_MIN = 10;
   var AMOUNT_TOL = 0.5;
@@ -626,6 +627,8 @@
     // Tickets sans numéro restants -> à rattacher (souvent ventes comptoir).
     tickets.forEach(function (p) {
       if (usedT.has(p.ticket_no)) return;
+      // Bank Transfer non rattaché : listé dans « Bank Transfer hors Site/Glovo ».
+      if (p.payment_type === BT) return;
       anomalies.push(anomaly({ source: "POS", severity: "info",
         type: "Ticket sans numéro (à rattacher)",
         detail: "Ticket " + p.ticket_no + " du " + dateKey(p.datetime) + " à " +
@@ -669,6 +672,8 @@
   function reconcileDinein(pos) {
     var anomalies = [];
     pos.filter(function (p) { return p.channel === CH_DINEIN; }).forEach(function (p) {
+      // Bank Transfer : traité par la liste dédiée « Bank Transfer hors Site/Glovo ».
+      if (p.payment_type === BT) return;
       if (DINEIN_ALLOWED.indexOf(p.payment_type) === -1) {
         anomalies.push(anomaly({ source: "Sur place", severity: "moyenne",
           type: "Mode de paiement inattendu (sur place/emporter)",
@@ -680,6 +685,33 @@
       }
     });
     return anomalies;
+  }
+
+  // ----------------------------------------------------------------------- //
+  // BANK TRANSFER HORS SITE / GLOVO : le « Bank Transfer » est réservé aux
+  // commandes Site et Glovo (paiement en ligne). Tout ticket payé en Bank
+  // Transfer dont le canal FINAL (après rattachements) n'est ni Site ni Glovo
+  // est listé : sur place/emporter, sans numéro non rattaché, nom inconnu.
+  // ----------------------------------------------------------------------- //
+  function bankTransferOutside(pos) {
+    var anomalies = [], list = [];
+    pos.forEach(function (p) {
+      if (p.payment_type !== BT) return;
+      if (p.channel === CH_GLOVO || p.channel === CH_SITE) return;
+      list.push(p);
+      anomalies.push(anomaly({ source: "POS", severity: "haute",
+        type: "Bank Transfer hors Site/Glovo",
+        detail: "Ticket " + (p.ticket_name || "(vide)") + " (n° " + p.ticket_no + ", " +
+                dtFull(p.datetime) + ", " + (isNaN(p.total) ? "?" : p.total.toFixed(0)) +
+                " DH, canal « " + p.channel + " ») payé 'Bank Transfer' alors qu'il n'est " +
+                "rattaché à aucune commande Site ni Glovo. Le Bank Transfer est réservé " +
+                "au Site et à Glovo : vérifier le mode de paiement réel.",
+        ticket_name: p.ticket_name || "(vide)", pos_datetime: p.datetime,
+        source_ref: p.ticket_no, amount_pos: p.total, payment_pos: p.payment_type,
+        payment_source: p.channel === CH_DINEIN ? "Cash / Credit card" : "",
+        file: "POS", row: p.row, when: dtFull(p.datetime) }));
+    });
+    return { anomalies: anomalies, list: list };
   }
 
   // ----------------------------------------------------------------------- //
@@ -808,6 +840,9 @@
     anomalies = anomalies.concat(reconcileUnassigned(pos, missingSite, missingGlovo));
     if (glovo) anomalies = anomalies.concat(glovoAggregate(pos, glovo));
     anomalies = detectDuplicates(pos, anomalies);  // doublons/corrections
+    // Bank Transfer hors Site/Glovo — sur les canaux FINAUX (après rattachements).
+    var bto = bankTransferOutside(pos);
+    anomalies = anomalies.concat(bto.anomalies);
 
     annotate(pos, anomalies);
     var summary = buildSummary(pos, anomalies, glovo, naps, site);
@@ -817,6 +852,9 @@
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
     summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
+    summary.bt_outside = bto.list;
+    summary.bt_outside_total = bto.list.reduce(function (a, p) {
+      return a + (isNaN(p.total) ? 0 : p.total); }, 0);
     return { anomalies: anomalies, pos: pos, summary: summary };
   }
 

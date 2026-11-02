@@ -143,7 +143,37 @@
 
     renderAnomalies();
     renderInfos();
+    renderBT();
     renderPos();
+  }
+
+  function btRows() {
+    return (state.summary.bt_outside || []).map(function (p) {
+      return {
+        "Ligne POS": p.row, "Ticket No.": p.ticket_no, "Date": p.date, "Heure": p.hour,
+        "Caissier": p.user, "Ticket name": p.ticket_name || "(vide)", "Canal détecté": p.channel,
+        "Total": isNaN(p.total) ? "" : p.total, "Mode de paiement": p.payment_type,
+      };
+    });
+  }
+
+  function renderBT() {
+    var rows = btRows();
+    document.getElementById("bt-count").textContent = rows.length ?
+      rows.length + " ticket(s) — total " + fmtDH(state.summary.bt_outside_total) :
+      "";
+    if (!rows.length) {
+      document.getElementById("bt-table").innerHTML =
+        "<tbody><tr><td>✅ Aucun Bank Transfer hors Site/Glovo.</td></tr></tbody>";
+      return;
+    }
+    var cols = Object.keys(rows[0]);
+    document.getElementById("bt-table").innerHTML =
+      "<thead><tr>" + cols.map(function (c) { return "<th>" + c + "</th>"; }).join("") +
+      "</tr></thead><tbody>" + rows.map(function (r) {
+        return "<tr class='row-anom'>" + cols.map(function (c) {
+          return "<td>" + escapeHtml(r[c] == null ? "" : String(r[c])) + "</td>"; }).join("") + "</tr>";
+      }).join("") + "</tbody>";
   }
 
   function fmtDH(v) {
@@ -278,6 +308,8 @@
       ["  dont haute", sm.severity.haute || 0],
       ["  dont moyenne", sm.severity.moyenne || 0],
       ["Infos (rattachements & notes)", sm.n_infos || 0],
+      ["Bank Transfer hors Site/Glovo (tickets)", (sm.bt_outside || []).length],
+      ["Bank Transfer hors Site/Glovo (DH)", Math.round((sm.bt_outside_total || 0) * 100) / 100],
       ["", ""],
     ];
     Object.keys(sm.channels).forEach(function (k) {
@@ -330,6 +362,12 @@
     var infos = state.anomalies.filter(function (a) { return a.severity === "info"; }).map(toRow);
     if (!infos.length) infos = [{ "Gravité": "—", "Détail": "Aucune info." }];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(infos), "Infos");
+
+    // Bank Transfer hors Site/Glovo
+    var bt = btRows();
+    if (bt.length) bt.push({ "Ticket name": "TOTAL", "Total": Math.round(sm.bt_outside_total * 100) / 100 });
+    else bt = [{ "Ticket No.": "✅", "Ticket name": "Aucun Bank Transfer hors Site/Glovo." }];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(bt), "Bank Transfer hors Site-Glovo");
 
     // POS annoté
     var posRows = state.pos.map(function (p) {

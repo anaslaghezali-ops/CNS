@@ -30,6 +30,7 @@ from .classify import (
 # Correspondance des modes de paiement source -> POS
 GLOVO_PAYMENT_MAP = {"Online": "Bank Transfer", "Cash": "Cash"}
 SITE_EXPECTED_PAYMENT = "Bank Transfer"
+BANK_TRANSFER = "Bank Transfer"
 DINEIN_ALLOWED_PAYMENTS = {"Cash", "Credit card"}
 
 # Fenêtre temporelle : le caissier tape la commande Glovo entre l'heure de
@@ -442,6 +443,8 @@ def reconcile_unassigned(pos_df, missing_site, missing_glovo):
     for i, p in tickets:
         if i in used_t:
             continue
+        if p["payment_type"] == BANK_TRANSFER:
+            continue  # traité par bank_transfer_outside()
         anomalies.append(_anomaly(
             "POS", "info", "Ticket sans numéro (à rattacher)",
             f"Ticket {p['ticket_no']} du {p['datetime']:%Y-%m-%d} à {p['datetime']:%H:%M} "
@@ -486,6 +489,8 @@ def reconcile_dinein(pos_df: pd.DataFrame):
     anomalies = []
     dinein = pos_df[pos_df["channel_detected"] == CHANNEL_DINEIN]
     for _, p in dinein.iterrows():
+        if p["payment_type"] == BANK_TRANSFER:
+            continue  # traité par bank_transfer_outside()
         if p["payment_type"] not in DINEIN_ALLOWED_PAYMENTS:
             anomalies.append(_anomaly(
                 "Sur place", "moyenne", "Mode de paiement inattendu (sur place/emporter)",
@@ -495,6 +500,37 @@ def reconcile_dinein(pos_df: pd.DataFrame):
                 amount_pos=p["total"], payment_pos=p["payment_type"],
             ))
     return anomalies
+
+
+# --------------------------------------------------------------------------- #
+# BANK TRANSFER HORS SITE / GLOVO
+# --------------------------------------------------------------------------- #
+
+def bank_transfer_outside(pos_df: pd.DataFrame):
+    """
+    Le « Bank Transfer » est réservé aux commandes Site et Glovo. Liste tous les
+    tickets payés en Bank Transfer dont le canal FINAL (après rattachements)
+    n'est ni Site ni Glovo. Renvoie (anomalies, DataFrame des tickets).
+    """
+    mask = (pos_df["payment_type"] == BANK_TRANSFER) & \
+           (~pos_df["channel_detected"].isin([CHANNEL_GLOVO, CHANNEL_SITE]))
+    rows = pos_df[mask]
+    anomalies = []
+    for _, p in rows.iterrows():
+        name = p["ticket_name"] or "(vide)"
+        when = f"{p['datetime']:%Y-%m-%d %H:%M}" if pd.notna(p.get("datetime")) else "?"
+        total = f"{p['total']:.0f}" if pd.notna(p["total"]) else "?"
+        anomalies.append(_anomaly(
+            "POS", "haute", "Bank Transfer hors Site/Glovo",
+            f"Ticket {name} (n° {p['ticket_no']}, {when}, {total} DH, canal "
+            f"« {p['channel_detected']} ») payé 'Bank Transfer' alors qu'il n'est "
+            f"rattaché à aucune commande Site ni Glovo. Le Bank Transfer est réservé "
+            f"au Site et à Glovo : vérifier le mode de paiement réel.",
+            ticket_name=name, pos_datetime=p.get("datetime"), source_ref=p["ticket_no"],
+            amount_pos=p["total"], payment_pos=p["payment_type"],
+            payment_source="Cash / Credit card" if p["channel_detected"] == CHANNEL_DINEIN else "",
+        ))
+    return anomalies, rows.copy()
 
 
 # --------------------------------------------------------------------------- #
@@ -539,6 +575,8 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
     all_anomalies += reconcile_unassigned(pos, missing_site, missing_glovo)
     if glovo_df is not None:
         all_anomalies += glovo_aggregate(pos, glovo_df)
+    bt_anoms, bt_rows = bank_transfer_outside(pos)
+    all_anomalies += bt_anoms
 
     pos_annotated = _annotate_pos(pos, all_anomalies)
     summary = _build_summary(pos, all_anomalies, glovo_df, naps_df, site_df)
@@ -547,6 +585,8 @@ def run_reconciliation(pos_df, glovo_df=None, naps_df=None, site_df=None):
     summary["pos_date_max"] = str(dates[-1]) if dates else ""
     summary["glovo_excluded"] = glovo_excluded
     summary["site_excluded"] = site_excluded
+    summary["bt_outside"] = bt_rows
+    summary["bt_outside_total"] = float(pd.to_numeric(bt_rows["total"], errors="coerce").sum())
     return all_anomalies, pos_annotated, summary
 
 

@@ -180,6 +180,20 @@ if "result" in st.session_state:
         st.caption(f"{len(real)} anomalie(s)")
         st.dataframe(_table(real), use_container_width=True, hide_index=True)
 
+    # Bank Transfer hors Site / Glovo
+    st.divider()
+    st.subheader("🏦 Bank Transfer hors Site / Glovo")
+    st.caption("Le Bank Transfer est réservé aux commandes Site et Glovo. Tickets payés "
+               "en Bank Transfer rattachés à aucune commande Site ni Glovo.")
+    bt = summary.get("bt_outside")
+    if bt is None or bt.empty:
+        st.success("✅ Aucun Bank Transfer hors Site/Glovo.")
+    else:
+        st.caption(f"{len(bt)} ticket(s) — total {summary['bt_outside_total']:,.0f} DH")
+        bt_cols = [c for c in ["ticket_no", "date", "hour", "user", "ticket_name",
+                               "channel_detected", "total", "payment_type"] if c in bt.columns]
+        st.dataframe(bt[bt_cols], use_container_width=True, hide_index=True)
+
     # Infos (rattachements & notes) — pas des anomalies
     st.divider()
     st.subheader("🔵 Infos (rattachements & notes)")
