@@ -46,7 +46,8 @@ accessible à :
 
 **Correspondances de paiement :**
 - Glovo `Online` → POS `Bank Transfer` · Glovo `Cash` → POS `Cash`
-- NAPS → toujours `Credit card` au POS
+- NAPS → toujours `Credit card` au POS. Le relevé est filtré sur la **date de transaction** (col I), jamais sur la date de télécollecte ou de règlement.
+- **Journée de service** : un ticket passé entre minuit et 05:00 appartient à la journée de la veille (ex. ticket du 07/11 à 00:06 → journée du 06/11). Côté NAPS, ce ticket est cherché à sa date réelle (07/11), et seules les transactions rattachées à la journée analysée entrent dans le total « Relevé NAPS ».
 - Site → toujours `Bank Transfer` au POS
 
 ## Anomalies détectées
