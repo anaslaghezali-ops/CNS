@@ -1,8 +1,8 @@
 name: Déployer ChickNSter sur GitHub Pages
 
+# Le site est publié UNIQUEMENT depuis la branche « Cursor » (version à jour).
+# Cette ancienne branche ne déclenche plus de déploiement, pour ne plus écraser le site.
 on:
-  push:
-    branches: ["claude/chicknster-reconciliation-system-460chx"]
   workflow_dispatch:
 
 permissions:
