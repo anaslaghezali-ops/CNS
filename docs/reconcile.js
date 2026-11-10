@@ -60,6 +60,16 @@
     var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
     return y + "-" + (m < 10 ? "0" + m : m) + "-" + (dd < 10 ? "0" + dd : dd);
   }
+  // Journée de SERVICE : un ticket passé après minuit (avant l'heure de
+  // coupure) appartient à la journée de la veille (ex. 07/11 00:06 -> 06/11).
+  var SERVICE_DAY_CUTOFF_HOUR = 5;
+  function serviceDayKey(d) {
+    if (!d) return "";
+    if (d.getHours() < SERVICE_DAY_CUTOFF_HOUR) {
+      return dateKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1, 12));
+    }
+    return dateKey(d);
+  }
   function minutesBetween(a, b) { return (a.getTime() - b.getTime()) / 60000; }
   function hhmm(d) {
     if (!d) return "";
@@ -338,23 +348,30 @@
   // ----------------------------------------------------------------------- //
   // NAPS
   // ----------------------------------------------------------------------- //
+  // Le relevé NAPS n'a que la DATE de transaction (pas l'heure) : on regroupe
+  // les tickets POS par journée de service, et chaque ticket est cherché dans
+  // le relevé à sa date CALENDAIRE (un ticket de 00:30 est daté du lendemain
+  // chez NAPS). Renvoie aussi les lignes NAPS attribuées à la période, pour
+  // que le total « Relevé NAPS » ne compte que la ou les journées analysées.
   function reconcileNaps(pos, naps) {
-    var anomalies = [];
-    if (!naps.length) return anomalies;
+    var anomalies = [], attributed = new Set();
+    if (!naps.length) return { anomalies: anomalies, attributed: attributed };
     // Tickets POS « Credit card » (avec date/heure, ligne, ticket).
     var posCC = pos.filter(function (p) { return p.payment_type === "Credit card"; });
 
     var napsDates = naps.map(function (n) { return n.date; }).filter(Boolean).sort();
     var nMin = napsDates[0], nMax = napsDates[napsDates.length - 1];
 
-    var posDates = {};
-    posCC.forEach(function (p) { var d = dateKey(p.datetime); if (d) posDates[d] = true; });
+    // Journées de service couvertes par le POS (tous paiements confondus).
+    var days = Array.from(posDateSet(pos)).sort();
+    var used = new Set();  // index NAPS déjà appariés (toutes journées)
 
-    Object.keys(posDates).sort().forEach(function (d) {
-      var posDay = posCC.filter(function (p) { return dateKey(p.datetime) === d; });
+    days.forEach(function (d) {
+      var posDay = posCC.filter(function (p) { return serviceDayKey(p.datetime) === d; });
 
       // Journée non couverte par le relevé NAPS -> info (décalage télécollecte).
       if (!(d >= nMin && d <= nMax)) {
+        if (!posDay.length) return;
         var total = posDay.reduce(function (a, p) { return a + (isNaN(p.total) ? 0 : p.total); }, 0);
         anomalies.push(anomaly({ source: "NAPS", severity: "info",
           type: "Journée non couverte par le relevé NAPS",
@@ -365,17 +382,17 @@
         return;
       }
 
-      // Rapprochement transaction par transaction, par montant, sur la journée.
-      var napsDay = naps.filter(function (n) { return n.date === d; });
-      var napsUsed = new Set();
+      // Rapprochement transaction par transaction, par montant, à la date
+      // calendaire du ticket.
       posDay.forEach(function (p) {
+        var cal = dateKey(p.datetime);
         var amt = Math.round((isNaN(p.total) ? 0 : p.total) * 100) / 100;
         var found = -1;
-        for (var i = 0; i < napsDay.length; i++) {
-          if (napsUsed.has(i)) continue;
-          if (Math.round(napsDay[i].montant * 100) / 100 === amt) { found = i; break; }
+        for (var i = 0; i < naps.length; i++) {
+          if (used.has(i) || naps[i].date !== cal) continue;
+          if (Math.round(naps[i].montant * 100) / 100 === amt) { found = i; break; }
         }
-        if (found >= 0) { napsUsed.add(found); return; }  // apparié -> OK
+        if (found >= 0) { used.add(found); attributed.add(found); return; }  // apparié -> OK
         anomalies.push(anomaly({ source: "NAPS", severity: "haute",
           type: "Paiement POS absent du TPE",
           detail: "Paiement 'Credit card' de " + amt.toFixed(0) + " DH au POS le " + d +
@@ -384,17 +401,21 @@
           ticket_name: p.ticket_name, pos_datetime: p.datetime, source_ref: p.ticket_no,
           amount_pos: amt, file: "POS", row: p.row, when: dtFull(p.datetime) }));
       });
-      // Transactions NAPS non appariées.
-      napsDay.forEach(function (n, i) {
-        if (napsUsed.has(i)) return;
-        anomalies.push(anomaly({ source: "NAPS", severity: "haute",
-          type: "Transaction TPE absente du POS",
-          detail: "Transaction NAPS de " + n.montant.toFixed(0) + " DH le " + d +
-                  " (ligne " + n.row + " du relevé) sans équivalent 'Credit card' au POS.",
-          source_ref: d, amount_source: n.montant, file: "NAPS", row: n.row, when: d }));
-      });
     });
-    return anomalies;
+
+    // Transactions NAPS non appariées datées d'une journée analysée.
+    // (Celles du lendemain non appariées appartiennent à la journée suivante.)
+    var daySet = new Set(days);
+    naps.forEach(function (n, i) {
+      if (used.has(i) || !daySet.has(n.date)) return;
+      attributed.add(i);
+      anomalies.push(anomaly({ source: "NAPS", severity: "haute",
+        type: "Transaction TPE absente du POS",
+        detail: "Transaction NAPS de " + n.montant.toFixed(0) + " DH le " + n.date +
+                " (ligne " + n.row + " du relevé) sans équivalent 'Credit card' au POS.",
+        source_ref: n.date, amount_source: n.montant, file: "NAPS", row: n.row, when: n.date }));
+    });
+    return { anomalies: anomalies, attributed: attributed };
   }
 
   // ----------------------------------------------------------------------- //
@@ -793,14 +814,14 @@
   // non couvert par le POS ne doit pas être signalée comme « absente »).
   function posDateSet(pos) {
     var set = new Set();
-    pos.forEach(function (p) { var k = dateKey(p.datetime); if (k) set.add(k); });
+    pos.forEach(function (p) { var k = serviceDayKey(p.datetime); if (k) set.add(k); });
     return set;
   }
 
   function filterToPosDates(rows, getDate, posDates) {
     var kept = [], excluded = 0;
     rows.forEach(function (r) {
-      var k = dateKey(getDate(r));
+      var k = serviceDayKey(getDate(r));
       if (k && !posDates.has(k)) { excluded++; return; }  // hors période -> ignoré
       kept.push(r);
     });
@@ -831,7 +852,11 @@
       var rs = reconcileSite(pos, site);
       anomalies = anomalies.concat(rs.anomalies); missingSite = rs.missing;
     }
-    if (naps) anomalies = anomalies.concat(reconcileNaps(pos, naps));
+    var napsAttributed = null;
+    if (naps) {
+      var rn = reconcileNaps(pos, naps);
+      anomalies = anomalies.concat(rn.anomalies); napsAttributed = rn.attributed;
+    }
     if (glovo) {
       var rg = reconcileGlovo(pos, glovo);
       anomalies = anomalies.concat(rg.anomalies); missingGlovo = rg.missing;
@@ -851,7 +876,7 @@
     summary.pos_date_max = dates.length ? dates[dates.length - 1] : "";
     summary.glovo_excluded = glovoExcluded;
     summary.site_excluded = siteExcluded;
-    summary.financial = computeFinancial(pos, glovo, naps, site, posDates);
+    summary.financial = computeFinancial(pos, glovo, naps, site, napsAttributed);
     summary.bt_outside = bto.list;
     summary.bt_outside_total = bto.list.reduce(function (a, p) {
       return a + (isNaN(p.total) ? 0 : p.total); }, 0);
@@ -860,7 +885,7 @@
 
   // Réconciliation FINANCIÈRE : totaux par mode de paiement × canal, et écarts
   // POS vs source (TPE/NAPS, Glovo, Site).
-  function computeFinancial(pos, glovo, naps, site, posDates) {
+  function computeFinancial(pos, glovo, naps, site, napsAttributed) {
     var PAYS = ["Cash", "Bank Transfer", "Credit card"];
     var byPayment = { "Cash": 0, "Bank Transfer": 0, "Credit card": 0, "Autre": 0 };
     var matrix = {};  // canal -> { paiement -> somme }
@@ -878,8 +903,9 @@
     }
     var posCC = byPayment["Credit card"];
     var napsTotal = 0;
-    if (naps) naps.forEach(function (n) {
-      if (posDates.has(n.date) && !isNaN(n.montant)) napsTotal += n.montant; });
+    // Uniquement les lignes NAPS rattachées aux journées de service analysées.
+    if (naps) naps.forEach(function (n, i) {
+      if (napsAttributed && napsAttributed.has(i) && !isNaN(n.montant)) napsTotal += n.montant; });
 
     var posGlovo = sumPos(CH_GLOVO), glovoW = 0;
     if (glovo) glovo.filter(function (g) { return (g.status || "").toLowerCase() === "delivered"; })
