@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-11-10 · 1";
+  var BUILD = "2026-11-10 · 2";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier
@@ -345,6 +345,7 @@
         last_status: s(r["Last Status"]),
         order_total: num(r["Order Total"]),
         delivery_method: s(r["Delivery Method"]),
+        payment_method: s(r["Mode de paiement"]),
         delivery_status: s(r["Delivery Provider Status"]),
       });
     });
@@ -425,6 +426,35 @@
     var m = s(o.delivery_method).toLowerCase().replace(/à/g, "a").replace(/é/g, "e");
     return m.indexOf("emporter") >= 0;
   }
+  // Col I « Mode de paiement » : « cmi » = payé EN LIGNE (carte sur le site),
+  // « cod » = payé à la livraison / au retrait.
+  function siteOrderIsPaidOnline(o) {
+    var m = s(o.payment_method).toLowerCase();
+    return m.indexOf("cmi") >= 0 || m.indexOf("en ligne") >= 0 || m.indexOf("online") >= 0;
+  }
+  // Emporter NON payé en ligne : encaissé au comptoir (Cash ou CB).
+  // Un emporter payé en ligne (cmi) est déjà encaissé : « Bank Transfer » au POS.
+  function siteOrderIsCounterPaid(o) {
+    return siteOrderIsTakeout(o) && !siteOrderIsPaidOnline(o);
+  }
+  function siteExpectedPaymentLabel(o) {
+    return siteOrderIsCounterPaid(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT;
+  }
+  function posHasNonBtPayment(p) {
+    var pays = parsePaymentTypes(p.payment_type);
+    if (!pays.length) pays = [p.payment_type];
+    return pays.some(function (x) { return x !== SITE_EXPECTED_PAYMENT; });
+  }
+  function siteOnlinePaymentText(o, p) {
+    var hasCC = parsePaymentTypes(p.payment_type).indexOf("Credit card") >= 0 ||
+                p.payment_type === "Credit card";
+    return "Commande site " + o.identifiant + " " +
+      (siteOrderIsTakeout(o) ? "à emporter" : "en livraison") +
+      " déjà PAYÉE EN LIGNE (col I « " + s(o.payment_method) + " ») : attendu « " +
+      SITE_EXPECTED_PAYMENT + " » au POS, trouvé « " + p.payment_type + " »." +
+      (hasCC ? " C'est pour cela que ce paiement carte est absent du relevé NAPS " +
+               "(le client n'est pas passé au TPE)." : "");
+  }
   function siteOrderIsClosed(o) {
     var ls = s(o.last_status).toLowerCase().replace(/é/g, "e");
     return ls === "fermee" || ls === "closed";
@@ -436,6 +466,13 @@
     return false;
   }
   function sitePaymentWarning(p, o) {
+    if (siteOrderIsTakeout(o) && siteOrderIsPaidOnline(o)) {
+      if (posHasNonBtPayment(p)) {
+        p._site_paid_online = o.identifiant;
+        return " ⚠️ De plus : " + siteOnlinePaymentText(o, p);
+      }
+      return "";
+    }
     if (siteOrderIsTakeout(o)) {
       if (parsePaymentTypes(p.payment_type).indexOf("Bank Transfer") >= 0 ||
           p.payment_type === "Bank Transfer") {
@@ -455,6 +492,19 @@
     return "";
   }
   function pushSitePaymentAnomalies(p, o, anomalies) {
+    if (siteOrderIsTakeout(o) && siteOrderIsPaidOnline(o)) {
+      if (posHasNonBtPayment(p)) {
+        p._site_paid_online = o.identifiant;
+        anomalies.push(posAnomaly(p, {
+          source: "Site", severity: "haute",
+          type: "Mode de paiement incorrect (commande payée en ligne)",
+          detail: siteOnlinePaymentText(o, p),
+          source_ref: o.identifiant,
+          payment_pos: p.payment_type,
+          payment_source: SITE_EXPECTED_PAYMENT + " (payé en ligne)" }));
+      }
+      return;
+    }
     if (siteOrderIsTakeout(o)) {
       if (parsePaymentTypes(p.payment_type).indexOf("Bank Transfer") >= 0 ||
           p.payment_type === "Bank Transfer") {
@@ -480,10 +530,12 @@
       return;
     }
     if (p.payment_type !== SITE_EXPECTED_PAYMENT) {
+      if (siteOrderIsPaidOnline(o)) p._site_paid_online = o.identifiant;
       anomalies.push(posAnomaly(p, {
         source: "Site", severity: "haute",
         type: "Mode de paiement incorrect",
-        detail: "Commande site " + o.identifiant + " (livraison) : attendu '" +
+        detail: siteOrderIsPaidOnline(o) ? siteOnlinePaymentText(o, p) :
+              "Commande site " + o.identifiant + " (livraison) : attendu '" +
                 SITE_EXPECTED_PAYMENT + "', trouvé '" + p.payment_type + "' au POS.",
         source_ref: o.identifiant,
         payment_pos: p.payment_type,
@@ -541,7 +593,7 @@
             detail: "Commande site " + sid + " : " + o.order_total + " DH (site) vs " +
                     p.total + " DH (POS).",
             source_ref: sid,
-            site_kind: siteOrderIsTakeout(o) ? "counter" : "delivery",
+            site_kind: siteOrderIsCounterPaid(o) ? "counter" : "delivery",
             amount_pos: p.total, amount_source: o.order_total }));
         }
       }
@@ -582,7 +634,7 @@
         source_ref: o.identifiant,
         amount_pos: m.total, amount_source: o.order_total,
         payment_pos: m.payment_type,
-        payment_source: siteOrderIsTakeout(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT }));
+        payment_source: siteExpectedPaymentLabel(o) }));
     });
 
     unmatchedDelivered.forEach(function (o, oi) {
@@ -612,7 +664,12 @@
       delete p._naps_split_row;
     });
 
-    var posCC = pos.filter(function (p) { return isPurePaymentType(p.payment_type, "Credit card"); });
+    // Un ticket site déjà payé en ligne (cmi) mais tapé « Credit card » ne peut
+    // pas être sur le TPE : il est signalé côté Site, pas apparié au relevé
+    // (sinon il « volerait » la transaction NAPS d'un autre ticket de même montant).
+    var posCC = pos.filter(function (p) {
+      return isPurePaymentType(p.payment_type, "Credit card") && !p._site_paid_online;
+    });
 
     var napsDates = naps.map(function (n) { return n.date; }).filter(Boolean).sort();
     var nMin = napsDates[0], nMax = napsDates[napsDates.length - 1];
@@ -1321,7 +1378,7 @@
           type: "Commande livrée absente du POS",
           detail: "Commande site " + d.id + " livrée mais introuvable dans le POS.",
           source_ref: String(d.id), amount_source: d.amount,
-          site_kind: siteOrderIsTakeout(d.o) ? "counter" : "delivery",
+          site_kind: siteOrderIsCounterPaid(d.o) ? "counter" : "delivery",
           file: "Site", row: d.o.row, when: d.ref ? dtFull(d.ref) : "" }));
       } else {
         anomalies.push(anomaly({ source: "Glovo", severity: "haute",
@@ -1671,7 +1728,7 @@
       }
       var srcItems = isGlovo ? (g.order_items || "") : "";
       var expPay = isGlovo ? GLOVO_PAYMENT_MAP[g.payment_type]
-        : (siteOrderIsTakeout(o) ? "Cash ou Credit card" : SITE_EXPECTED_PAYMENT);
+        : siteExpectedPaymentLabel(o);
       info.expected_payment = expPay;
 
       pos.forEach(function (p) {
@@ -1687,7 +1744,7 @@
 
         var samePay = isGlovo
           ? p.payment_type === expPay
-          : (siteOrderIsTakeout(o) ? isAllDineinPayments(p.payment_type)
+          : (siteOrderIsCounterPaid(o) ? isAllDineinPayments(p.payment_type)
                                    : p.payment_type === SITE_EXPECTED_PAYMENT);
         var sim = (srcItems && p.designations)
           ? productSimilarity(p.designations, srcItems) : 0;
@@ -2190,6 +2247,7 @@
       delete p.wrong_name_order;
       delete p._naps_split_cc;
       delete p._naps_split_row;
+      delete p._site_paid_online;
       delete p.statut;
       delete p.anomalies;
     });
@@ -2394,7 +2452,7 @@
     if (site) {
       site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
         if (isNaN(o.order_total)) return;
-        if (siteOrderIsTakeout(o)) siteSrcCounter += o.order_total;
+        if (siteOrderIsCounterPaid(o)) siteSrcCounter += o.order_total;
         else siteSrcDelivery += o.order_total;
       });
     }
@@ -2441,19 +2499,21 @@
       });
     }
     if (site) {
-      var siteTotalNote = "Côté POS : Total = Livraison (Bank Transfer) + Emporter (Cash + CB).";
+      var siteTotalNote = "Côté POS : Total = Livraison et payé en ligne (Bank Transfer) + " +
+        "Emporter payé au comptoir (Cash + CB).";
       lines.push({
-        lineKey: "site_delivery", source: "🌐 Site — Livraison",
+        lineKey: "site_delivery", source: "🌐 Site — Livraison + payé en ligne",
         pos_label: "POS Site « Bank Transfer »", pos: posSiteBT,
-        src_label: "Site livrées (col L)", src: siteSrcDelivery,
+        src_label: "Site livrées (col L) + emporter payé en ligne (cmi)", src: siteSrcDelivery,
         ecart: siteSrcDelivery - posSiteBT, group: "site",
       });
       lines.push({
-        lineKey: "site_counter", source: "🌐 Site — Emporter (comptoir)",
+        lineKey: "site_counter", source: "🌐 Site — Emporter payé au comptoir",
         pos_label: "POS Site « Cash + Credit card »", pos: posSiteCounter,
-        src_label: "Site emporter Fermée", src: siteSrcCounter,
+        src_label: "Site emporter Fermée (non payé en ligne)", src: siteSrcCounter,
         ecart: siteSrcCounter - posSiteCounter, group: "site",
-        note: "Emporter payé au comptoir : « Bank Transfer » est interdit.",
+        note: "Emporter payé au comptoir : « Bank Transfer » est interdit. " +
+              "Un emporter payé en ligne (cmi) doit être en « Bank Transfer ».",
       });
       lines.push({
         lineKey: "site", source: "🌐 Site — Total", pos_label: "POS tickets Site",
@@ -2700,7 +2760,7 @@
     if (!site) return contribs;
 
     site.filter(siteOrderCountsInReconciliation).forEach(function (o) {
-      if (!siteOrderIsTakeout(o)) return;
+      if (!siteOrderIsCounterPaid(o)) return;
       var srcAmt = isNaN(o.order_total) ? 0 : o.order_total;
       if (srcAmt <= AMOUNT_TOL) return;
       var p = findPosForSiteOrder(o, pos, anomalies);
@@ -2763,7 +2823,7 @@
       var sid = a.source_ref;
       if (!sid) return;
       var o = siteById[sid];
-      if (!o || !siteOrderIsTakeout(o)) return;
+      if (!o || !siteOrderIsCounterPaid(o)) return;
       if (seen[sid]) return;
       var p = a.pos_ticket_no ? findPosByTicketNo(pos, a.pos_ticket_no) : null;
       if (!p) p = findPosForSiteOrder(o, pos, anomalies);
@@ -3128,6 +3188,13 @@
       // montant de la ligne Livraison vers la ligne Emporter.
       adj.site_pos_bt -= ap;
       adj.site_pos_counter += ap;
+    } else if (t === "Mode de paiement incorrect (commande payée en ligne)") {
+      // Payé en ligne mais tapé Cash/CB : le montant relève de la ligne
+      // Bank Transfer, et une carte tapée à tort n'est pas sur le TPE.
+      adj.site_pos_counter -= ap;
+      adj.site_pos_bt += ap;
+      if (parsePaymentTypes(a.payment_pos).indexOf("Credit card") >= 0 ||
+          a.payment_pos === "Credit card") adj.pos_cc -= ap;
     } else if (t === "Commande Glovo Online absente du POS (écart financier)") {
       adj.glovo_src_online -= as;
     } else if (t === "Commande Glovo Cash absente du POS (écart financier)") {
