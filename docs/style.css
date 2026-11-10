@@ -257,4 +257,10 @@ tbody tr:hover { background: #fbfbfb; }
 }
 .spemp-review-block h3 { margin: 0 0 8px; font-size: 1rem; color: #2c5282; }
 
+.bt-outside-block {
+  margin: 16px 0; padding: 14px 16px; background: #fdf6f0;
+  border: 1px solid #ebcfb5; border-radius: 8px;
+}
+.bt-outside-block h3 { margin: 0 0 8px; font-size: 1rem; color: #8b3a1a; }
+
 footer { max-width: 1160px; margin: 0 auto; padding: 20px; text-align: center; }

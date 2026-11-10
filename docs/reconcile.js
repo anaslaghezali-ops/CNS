@@ -8,7 +8,7 @@
   "use strict";
 
   /** Version affichée dans le pied de page : permet de vérifier le code réellement chargé. */
-  var BUILD = "2026-08-12 · 9";
+  var BUILD = "2026-11-10 · 1";
 
   // ----------------------------------------------------------------------- //
   // Constantes / règles métier

@@ -350,6 +350,7 @@
     renderNapsBalanced();
     renderLinkReport();
     renderSpempReview();
+    renderBtOutside();
 
     var sources = uniq(activeAnomalies().map(function (a) { return a.source; }));
     var wrap = document.getElementById("fsrc-wrap");
@@ -841,6 +842,38 @@
         escapeHtml(r.ticket_name) + "</td><td>" + escapeHtml(r.ticket_no) + "</td><td><b>" +
         (r.total == null || isNaN(r.total) ? "—" : fmtDH(r.total)) + "</b></td><td>" +
         escapeHtml(r.payment_type) + "</td><td>" + kind + "</td></tr>";
+    });
+    html += "</tbody></table></div>";
+    content.innerHTML = html;
+  }
+
+  // Tickets POS « Bank Transfer » dont le canal final n'est ni Site ni Glovo.
+  function btOutsideTickets(runResult) {
+    if (!runResult || !runResult.pos) return [];
+    return runResult.pos.filter(function (p) {
+      return p.payment_type === "Bank Transfer" &&
+        p.channel !== CNS.CH.SITE && p.channel !== CNS.CH.GLOVO;
+    });
+  }
+
+  function renderBtOutside() {
+    var content = document.getElementById("bt-outside-content");
+    var rows = btOutsideTickets(getViewState());
+    if (!rows.length) {
+      content.innerHTML = "<p style='margin:0'>✅ Aucun Bank Transfer hors Site/Glovo.</p>";
+      return;
+    }
+    var total = rows.reduce(function (s, p) { return s + (isNaN(p.total) ? 0 : p.total); }, 0);
+    var html = "<p class='muted' style='margin:0 0 10px'><b>" + rows.length +
+      "</b> ticket(s) · <b>" + fmtDH(total) + "</b></p>";
+    html += '<div class="table-wrap"><table><thead><tr>' +
+      "<th>Date</th><th>Heure</th><th>Caissier</th><th>Ticket name</th><th>N° POS</th>" +
+      "<th>Canal détecté</th><th>Total</th></tr></thead><tbody>";
+    rows.forEach(function (p) {
+      html += "<tr class='row-anom'><td>" + escapeHtml(p.date) + "</td><td>" + escapeHtml(p.hour) +
+        "</td><td>" + escapeHtml(p.user) + "</td><td>" + escapeHtml(p.ticket_name || "(vide)") +
+        "</td><td>" + escapeHtml(p.ticket_no) + "</td><td>" + escapeHtml(p.channel) +
+        "</td><td><b>" + (isNaN(p.total) ? "—" : fmtDH(p.total)) + "</b></td></tr>";
     });
     html += "</tbody></table></div>";
     content.innerHTML = html;
@@ -1348,6 +1381,23 @@
     }
 
     appendAnomalySheets(state, "");
+
+    // Bank Transfer hors Site/Glovo (toute la période).
+    var btList = btOutsideTickets(state);
+    var btRows = btList.map(function (p) {
+      return {
+        "Date": p.date, "Heure": p.hour, "Caissier": p.user,
+        "Ticket name": p.ticket_name || "(vide)", "N° POS": p.ticket_no,
+        "Canal détecté": p.channel, "Total": isNaN(p.total) ? "" : p.total,
+      };
+    });
+    if (btRows.length) {
+      btRows.push({ "Ticket name": "TOTAL", "Total": Math.round(btList.reduce(function (s, p) {
+        return s + (isNaN(p.total) ? 0 : p.total); }, 0) * 100) / 100 });
+    } else {
+      btRows = [{ "Date": "✅", "Ticket name": "Aucun Bank Transfer hors Site/Glovo." }];
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(btRows), "BT hors Site-Glovo");
 
     if (state.spemp_review && state.spemp_review.length) {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
